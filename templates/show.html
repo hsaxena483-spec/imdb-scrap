@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ show.title }} - Details Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="glass-panel">
+        <div class="nav-container">
+            <a href="/" class="brand">
+                <div class="brand-logo">IMDb<span>Scraper</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="/">Dashboard</a>
+                <a href="/update" class="nav-btn">Sync IMDb Data</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-container">
+        <!-- Back Link -->
+        <a href="/" class="back-link">← Back to Dashboard</a>
+
+        <!-- Show Header / Main Details -->
+        <section class="detail-header">
+            <div class="detail-poster-wrapper">
+                {% if show.poster_url %}
+                    <img src="{{ show.poster_url }}" alt="{{ show.title }} Poster" class="detail-poster">
+                {% else %}
+                    <div style="width:100%; height:450px; display:flex; align-items:center; justify-content:center; background:#374151;">No Poster</div>
+                {% endif %}
+            </div>
+            <div class="detail-body">
+                <h1>{{ show.title }}</h1>
+                <div class="detail-stats">
+                    <span class="rank-badge">Rank #{{ show.current_rank }}</span>
+                    {% if show.global_rating %}
+                        <span class="detail-rating">★ {{ show.global_rating }}<span style="color:var(--text-secondary); font-size:0.875rem;">/10</span></span>
+                        <span class="detail-votes">({{ show.global_vote_count | comma }} votes)</span>
+                    {% endif %}
+                </div>
+                
+                <p class="detail-plot">{{ show.plot or 'No plot summary available.' }}</p>
+                
+                <div class="detail-info-grid">
+                    <span class="info-label">Release Year</span>
+                    <span class="info-value">{{ show.release_year }}{% if show.end_year %} - {{ show.end_year }}{% elif show.type == 'tvSeries' %}+ (Ongoing){% endif %}</span>
+                    
+                    <span class="info-label">Certificate</span>
+                    <span class="info-value">{{ show.certificate or 'N/A' }}</span>
+                    
+                    <span class="info-label">Runtime</span>
+                    <span class="info-value">
+                        {% if show.runtime_seconds %}
+                            {{ show.runtime_seconds // 60 }} mins
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </span>
+                    
+                    <span class="info-label">Genres</span>
+                    <span class="info-value">
+                        {% if show.genres %}
+                            {% for genre in show.genres %}
+                                <span class="genre-tag" style="margin-right: 4px;">{{ genre }}</span>
+                            {% endfor %}
+                        {% else %}
+                            N/A
+                        {% endif %}
+                    </span>
+                    
+                    <span class="info-label">Creators</span>
+                    <span class="info-value">{{ show.creators or 'N/A' }}</span>
+                    
+                    <span class="info-label">Stars</span>
+                    <span class="info-value">{{ show.stars or 'N/A' }}</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Country-Specific Ratings Section -->
+        <section class="countries-section">
+            <h2 class="section-title">Ratings by Country</h2>
+            {% if country_ratings %}
+                <div class="countries-grid">
+                    {% for cr in country_ratings %}
+                        <div class="country-card glass-panel">
+                            <div class="country-header">
+                                <span class="country-name">{{ cr.country_name }}</span>
+                                <span class="country-code">{{ cr.country_code }}</span>
+                            </div>
+                            <div class="country-rating-val">{{ cr.rating }}<span>/10</span></div>
+                            <div class="country-votes">{{ cr.vote_count | comma }} reviews/votes</div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="glass-panel" style="padding: 24px; text-align: center; color: var(--text-secondary);">
+                    No country-specific ratings have been fetched for this show.
+                </div>
+            {% endif %}
+        </section>
+
+        <!-- User Reviews Section -->
+        <section class="reviews-section">
+            <h2 class="section-title">User Reviews</h2>
+            {% if reviews %}
+                <div class="reviews-list">
+                    {% for r in reviews %}
+                        <div class="review-card glass-panel">
+                            <div class="review-header">
+                                <div>
+                                    <h3 class="review-title">{{ r.summary }}</h3>
+                                    <div class="review-meta">
+                                        <span>By <strong>{{ r.author_username }}</strong></span>
+                                        <span>•</span>
+                                        <span>{{ r.submission_date }}</span>
+                                        {% if r.is_spoiler %}
+                                            <span class="spoiler-alert">SPOILER</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% if r.rating %}
+                                    <span class="review-rating-badge">★ {{ r.rating }}<span style="font-size:0.75rem; font-weight:400; color:var(--text-secondary);">/10</span></span>
+                                {% endif %}
+                            </div>
+                            <p class="review-content">{{ r.content }}</p>
+                            <div class="review-footer">
+                                <span class="helpfulness-votes">Helpful: {{ r.up_votes }} upvotes / {{ r.down_votes }} downvotes</span>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="glass-panel" style="padding: 24px; text-align: center; color: var(--text-secondary);">
+                    No user reviews have been saved for this show yet.
+                </div>
+            {% endif %}
+        </section>
+    </main>
+</body>
+</html>

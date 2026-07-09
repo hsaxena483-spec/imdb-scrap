@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMDb Popular TV Shows Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="glass-panel">
+        <div class="nav-container">
+            <a href="/" class="brand">
+                <div class="brand-logo">IMDb<span>Scraper</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="/">Dashboard</a>
+                <a href="/update" class="nav-btn">Sync IMDb Data</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-container">
+        <!-- Toast Syncing Notification -->
+        {% if request.args.get('syncing') == 'true' %}
+            <div class="glass-panel toast-sync">
+                <span class="toast-dot"></span>
+                <span>IMDb Sync started in background! Refresh page in a moment to see new data.</span>
+            </div>
+        {% endif %}
+
+        <!-- Stats Banner -->
+        <section class="stats-banner glass-panel">
+            <div class="stat-item">
+                <div class="stat-val">{{ stats.total_shows }}</div>
+                <div class="stat-lbl">Shows Scraped</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-val">{{ stats.avg_rating }}</div>
+                <div class="stat-lbl">Average Rating</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-val">{{ stats.total_votes }}</div>
+                <div class="stat-lbl">Total Votes Represented</div>
+            </div>
+        </section>
+
+        <!-- Shows List Section -->
+        <h2 class="section-title">Trending TV Shows</h2>
+        {% if shows %}
+            <section class="shows-grid">
+                {% for show in shows %}
+                    <div class="show-card glass-panel" onclick="window.location.href='/show/{{ show.id }}'">
+                        <div class="card-poster-wrapper">
+                            <span class="rank-badge">#{{ show.current_rank }}</span>
+                            {% if show.global_rating %}
+                                <span class="rating-badge">★ {{ show.global_rating }}</span>
+                            {% endif %}
+                            {% if show.poster_url %}
+                                <img src="{{ show.poster_url }}" alt="{{ show.title }} Poster" class="card-poster" loading="lazy">
+                            {% else %}
+                                <div class="card-poster" style="display:flex; align-items:center; justify-content:center; background:#374151;">No Poster</div>
+                            {% endif %}
+                        </div>
+                        <div class="card-info">
+                            <h3 class="card-title" title="{{ show.title }}">{{ show.title }}</h3>
+                            <div class="card-meta">
+                                <span>{{ show.release_year }}{% if show.end_year %} - {{ show.end_year }}{% elif show.type == 'tvSeries' %}+{% endif %}</span>
+                                <span>•</span>
+                                <span>{{ show.certificate or 'N/A' }}</span>
+                            </div>
+                            
+                            <!-- Genres -->
+                            {% if show.genres %}
+                                <div class="card-genres">
+                                    {% for genre in show.genres %}
+                                        <span class="genre-tag">{{ genre }}</span>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </section>
+
+            <!-- Pagination Controls -->
+            {% if pagination.total_pages > 1 %}
+                <nav class="pagination-container glass-panel">
+                    {% if pagination.has_prev %}
+                        <a href="{{ url_for('index', page=pagination.prev_num) }}" class="pagination-btn">← Prev</a>
+                    {% else %}
+                        <span class="pagination-btn disabled">← Prev</span>
+                    {% endif %}
+
+                    <div class="pagination-pages">
+                        {% for p in range(1, pagination.total_pages + 1) %}
+                            {% if p == pagination.page %}
+                                <span class="pagination-btn active-page">{{ p }}</span>
+                            {% else %}
+                                <a href="{{ url_for('index', page=p) }}" class="pagination-btn">{{ p }}</a>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+
+                    {% if pagination.has_next %}
+                        <a href="{{ url_for('index', page=pagination.next_num) }}" class="pagination-btn">Next →</a>
+                    {% else %}
+                        <span class="pagination-btn disabled">Next →</span>
+                    {% endif %}
+                </nav>
+            {% endif %}
+        {% else %}
+            <div class="glass-panel" style="padding: 40px; text-align: center; color: var(--text-secondary);">
+                <h3>No data available in the database yet.</h3>
+                <p style="margin-top: 10px; font-size: 0.95rem;">Please run `python scraper.py` in your terminal to scrape and populate shows.</p>
+            </div>
+        {% endif %}
+    </main>
+
+    {% if request.args.get('syncing') == 'true' %}
+    <script>
+        function checkSyncStatus() {
+            fetch('/sync_status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'idle') {
+                        // Sync completed, redirect to home to refresh page contents and remove query param
+                        window.location.href = '/';
+                    } else {
+                        // Still syncing, check again in 2 seconds
+                        setTimeout(checkSyncStatus, 2000);
+                    }
+                })
+                .catch(err => {
+                    console.error("Error checking sync status:", err);
+                    setTimeout(checkSyncStatus, 3000);
+                });
+        }
+        // Start polling check
+        setTimeout(checkSyncStatus, 2000);
+    </script>
+    {% endif %}
+</body>
+</html>
