@@ -187,6 +187,10 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-    port = int(os.getenv("FLASK_PORT", 5000))
-    print(f"Starting Flask Dashboard server on http://127.0.0.1:{port}...")
-    app.run(debug=True, port=port)
+      port = int(os.environ.get("PORT", 5000))
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
