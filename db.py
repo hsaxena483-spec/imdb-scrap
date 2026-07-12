@@ -104,6 +104,14 @@ def init_db():
             creators TEXT,
             stars TEXT,
             current_rank INTEGER,
+            platform VARCHAR(100),
+            content_format VARCHAR(100),
+            paid_free VARCHAR(20),
+            content_type VARCHAR(50),
+            languages TEXT,
+            reach NUMERIC(10, 5),
+            week VARCHAR(50),
+            market VARCHAR(50),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -151,6 +159,17 @@ def init_db():
         );
         """)
         
+        # 5. Create platform_gender table
+        print("Creating table: platform_gender...")
+        execute_query(conn, is_sqlite, """
+        CREATE TABLE IF NOT EXISTS platform_gender (
+            platform VARCHAR(100) PRIMARY KEY,
+            total_reach NUMERIC(10, 5),
+            male_pct NUMERIC(5, 3),
+            female_pct NUMERIC(5, 3)
+        );
+        """)
+        
         if is_sqlite:
             conn.commit()
             
@@ -169,9 +188,10 @@ def save_show(conn, is_sqlite, show_data):
     INSERT INTO shows (
         id, title, type, release_year, end_year, global_rating, global_vote_count,
         runtime_seconds, certificate, plot, poster_url, release_date, total_episodes,
-        creators, stars, current_rank, updated_at
+        creators, stars, current_rank, platform, content_format, paid_free,
+        content_type, languages, reach, week, market, updated_at
     ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
     ) ON CONFLICT (id) DO UPDATE SET
         title = EXCLUDED.title,
         type = EXCLUDED.type,
@@ -188,25 +208,41 @@ def save_show(conn, is_sqlite, show_data):
         creators = EXCLUDED.creators,
         stars = EXCLUDED.stars,
         current_rank = EXCLUDED.current_rank,
+        platform = EXCLUDED.platform,
+        content_format = EXCLUDED.content_format,
+        paid_free = EXCLUDED.paid_free,
+        content_type = EXCLUDED.content_type,
+        languages = EXCLUDED.languages,
+        reach = EXCLUDED.reach,
+        week = EXCLUDED.week,
+        market = EXCLUDED.market,
         updated_at = CURRENT_TIMESTAMP;
     """
     params = (
-        show_data['id'],
-        show_data['title'],
-        show_data['type'],
-        show_data['release_year'],
-        show_data['end_year'],
-        show_data['global_rating'],
-        show_data['global_vote_count'],
-        show_data['runtime_seconds'],
-        show_data['certificate'],
-        show_data['plot'],
-        show_data['poster_url'],
-        show_data['release_date'],
-        show_data['total_episodes'],
-        show_data['creators'],
-        show_data['stars'],
-        show_data['current_rank']
+        show_data.get('id'),
+        show_data.get('title'),
+        show_data.get('type'),
+        show_data.get('release_year'),
+        show_data.get('end_year'),
+        show_data.get('global_rating'),
+        show_data.get('global_vote_count'),
+        show_data.get('runtime_seconds'),
+        show_data.get('certificate'),
+        show_data.get('plot'),
+        show_data.get('poster_url'),
+        show_data.get('release_date'),
+        show_data.get('total_episodes'),
+        show_data.get('creators'),
+        show_data.get('stars'),
+        show_data.get('current_rank'),
+        show_data.get('platform'),
+        show_data.get('content_format'),
+        show_data.get('paid_free'),
+        show_data.get('content_type'),
+        show_data.get('languages'),
+        show_data.get('reach'),
+        show_data.get('week'),
+        show_data.get('market')
     )
     execute_query(conn, is_sqlite, query, params)
 
@@ -300,6 +336,24 @@ def is_show_fresh(conn, is_sqlite, show_id):
     except Exception as e:
         print(f"Warning: Error checking show freshness: {e}")
         return False
+
+def save_platform_gender(conn, is_sqlite, data):
+    query = """
+    INSERT INTO platform_gender (platform, total_reach, male_pct, female_pct)
+    VALUES (%s, %s, %s, %s)
+    ON CONFLICT (platform) DO UPDATE SET
+        total_reach = EXCLUDED.total_reach,
+        male_pct = EXCLUDED.male_pct,
+        female_pct = EXCLUDED.female_pct;
+    """
+    execute_query(conn, is_sqlite, query, (
+        data['platform'], data['total_reach'], data['male_pct'], data['female_pct']
+    ))
+
+def get_all_platform_gender(conn, is_sqlite):
+    query = "SELECT platform, total_reach, male_pct, female_pct FROM platform_gender ORDER BY total_reach DESC"
+    cursor = execute_query(conn, is_sqlite, query)
+    return cursor.fetchall()
 
 if __name__ == "__main__":
     init_db()
