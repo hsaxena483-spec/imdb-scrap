@@ -9,6 +9,23 @@ load_dotenv()
 
 app = Flask(__name__)
 
+def normalize_genre(genre_name):
+    if not genre_name:
+        return ""
+    g = genre_name.strip().lower()
+    if g in ["reality-tv", "reality tv", "reality_tv"]:
+        return "Reality TV"
+    if g in ["sci-fi", "scifi", "science fiction"]:
+        return "Sci-Fi"
+    if g in ["talk-show", "talk show"]:
+        return "Talk Show"
+    if g in ["game-show", "game show"]:
+        return "Game Show"
+    if g in ["tv-movie", "tv movie"]:
+        return "TV Movie"
+    return genre_name.strip().replace('-', ' ').title()
+
+
 @app.template_global()
 def modify_query(page_num):
     args = request.args.copy()
@@ -70,8 +87,16 @@ def index():
     reach_min = request.args.get('reach_min', '', type=str)
     reach_max = request.args.get('reach_max', '', type=str)
     
+    sports_mode = request.args.get('sports_mode', '')
+    
     # Build WHERE clauses dynamically
     where_clauses = ["s.current_rank IS NOT NULL"]
+    
+    if sports_mode == 'only':
+        where_clauses.append("(s.content_type = 'Sports' OR s.id IN (SELECT show_id FROM show_genres WHERE genre IN ('Sport', 'Sports')))")
+    elif sports_mode == 'exclude':
+        where_clauses.append("(s.content_type IS NULL OR s.content_type != 'Sports') AND s.id NOT IN (SELECT show_id FROM show_genres WHERE genre IN ('Sport', 'Sports'))")
+        
     params = []
     
     if filter_platform:
@@ -102,11 +127,22 @@ def index():
         where_clauses.append("s.reach <= %s")
         params.append(float(reach_max))
     
-    # Genre filter: need to check show_genres table
+    # Genre filter: need to check show_genres table with database value mapping
     if filter_genre:
-        placeholders = ', '.join(['%s'] * len(filter_genre))
-        where_clauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
-        params.extend(filter_genre)
+        db_genres_rows, _ = get_db_data("SELECT DISTINCT genre FROM show_genres")
+        raw_matches = []
+        for row in db_genres_rows:
+            db_gen = row[0]
+            if db_gen and normalize_genre(db_gen) in filter_genre:
+                raw_matches.append(db_gen)
+        
+        if raw_matches:
+            placeholders = ', '.join(['%s'] * len(raw_matches))
+            where_clauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
+            params.extend(raw_matches)
+        else:
+            where_clauses.append("1=0")
+
     
     # Language filter: use LIKE on the languages TEXT column
     if filter_language:
@@ -143,19 +179,20 @@ def index():
                s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
         FROM shows s
         WHERE {where_sql}
-        ORDER BY s.current_rank ASC
+        ORDER BY s.global_rating DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     all_params = list(params) + [per_page, offset]
     shows_rows, shows_cols = get_db_data(shows_query, tuple(all_params))
     
     shows = []
-    for row in shows_rows:
+    for idx, row in enumerate(shows_rows):
         show = dict(zip(shows_cols, row))
         if show['global_rating'] is not None:
             show['global_rating'] = float(show['global_rating'])
         if show['reach'] is not None:
             show['reach'] = round(float(show['reach']), 2)
+        show['display_rank'] = offset + idx + 1
         shows.append(show)
         
     # Fetch genres mapping for displayed shows
@@ -163,12 +200,15 @@ def index():
     genres_by_show = {}
     for r in genre_rows:
         show_id, genre = r[0], r[1]
+        norm_genre = normalize_genre(genre)
+        if not norm_genre:
+            continue
         if show_id not in genres_by_show:
-            genres_by_show[show_id] = []
-        genres_by_show[show_id].append(genre)
+            genres_by_show[show_id] = set()
+        genres_by_show[show_id].add(norm_genre)
         
     for show in shows:
-        show['genres'] = genres_by_show.get(show['id'], [])
+        show['genres'] = sorted(list(genres_by_show.get(show['id'], [])))
     
     # Stats for filtered results
     stats_query = f"""
@@ -224,7 +264,7 @@ def index():
     
     filter_options = {
         'platforms': [r[0] for r in platforms_data],
-        'genres': [r[0] for r in genres_data],
+        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0] and normalize_genre(r[0]) not in ['Sport', 'Sports']))),
         'content_types': [r[0] for r in content_types_data],
         'content_formats': [r[0] for r in content_formats_data],
         'paid_free': [r[0] for r in paid_free_data],
@@ -241,6 +281,7 @@ def index():
         'gender': filter_gender,
         'reach_min': reach_min,
         'reach_max': reach_max,
+        'sports_mode': sports_mode,
     }
     
     pagination = {
@@ -284,7 +325,7 @@ def show_detail(show_id):
         
     # Fetch genres
     genre_rows, _ = get_db_data("SELECT genre FROM show_genres WHERE show_id = %s", (show_id,))
-    show['genres'] = [r[0] for r in genre_rows]
+    show['genres'] = sorted(list(set(normalize_genre(r[0]) for r in genre_rows if r[0])))
     
     # Fetch country ratings
     country_rows, country_cols = get_db_data("""
@@ -329,10 +370,140 @@ def api_filters():
     
     return jsonify({
         'platforms': [r[0] for r in platforms_data],
-        'genres': [r[0] for r in genres_data],
+        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0] and normalize_genre(r[0]) not in ['Sport', 'Sports']))),
         'content_types': [r[0] for r in content_types_data],
         'content_formats': [r[0] for r in content_formats_data],
     })
+
+
+@app.route("/analytics")
+def analytics():
+    # 1. Top 10 content by rank with reach and rating
+    top_shows_rows, top_shows_cols = get_db_data("""
+        SELECT title, reach, global_rating 
+        FROM shows 
+        WHERE current_rank IS NOT NULL 
+          AND (content_type IS NULL OR LOWER(content_type) != 'sports')
+        ORDER BY current_rank ASC 
+        LIMIT 10
+    """)
+    top_shows = []
+    for row in top_shows_rows:
+        show = dict(zip(top_shows_cols, row))
+        show['reach'] = float(show['reach']) if show['reach'] is not None else 0.0
+        show['global_rating'] = float(show['global_rating']) if show['global_rating'] is not None else 0.0
+        top_shows.append(show)
+
+    # 2. Platform distribution
+    platform_rows, platform_cols = get_db_data("""
+        SELECT platform, COUNT(*) as count 
+        FROM shows 
+        WHERE platform IS NOT NULL AND current_rank IS NOT NULL 
+        GROUP BY platform 
+        ORDER BY count DESC
+    """)
+    platforms = []
+    for row in platform_rows:
+        platforms.append({
+            'platform': row[0],
+            'count': int(row[1])
+        })
+
+    # 2b. Format distribution by reach (views)
+    format_rows, _ = get_db_data("""
+        SELECT content_format, SUM(reach) as total_reach 
+        FROM shows 
+        WHERE content_format IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL 
+        GROUP BY content_format 
+        ORDER BY total_reach DESC
+    """)
+    formats_by_reach = []
+    for row in format_rows:
+        formats_by_reach.append({
+            'format': row[0],
+            'reach': round(float(row[1]), 2)
+        })
+
+    # 3. Genre reach percentage
+    genre_rows, _ = get_db_data("""
+        SELECT s.id, s.reach, g.genre 
+        FROM shows s 
+        JOIN show_genres g ON s.id = g.show_id 
+        WHERE s.reach IS NOT NULL AND s.current_rank IS NOT NULL
+    """)
+    
+    show_genres_map = {}
+    for show_id, reach, genre in genre_rows:
+        norm_genre = normalize_genre(genre)
+        if not norm_genre:
+            continue
+        if show_id not in show_genres_map:
+            show_genres_map[show_id] = (float(reach) if reach is not None else 0.0, set())
+        show_genres_map[show_id][1].add(norm_genre)
+        
+    genre_reach_map = {}
+    for show_id, (reach, genres) in show_genres_map.items():
+        for genre in genres:
+            genre_reach_map[genre] = genre_reach_map.get(genre, 0.0) + reach
+            
+    total_genre_reach = sum(genre_reach_map.values())
+    genre_percentages = []
+    if total_genre_reach > 0:
+        for genre, reach in genre_reach_map.items():
+            pct = (reach / total_genre_reach) * 100
+            genre_percentages.append({
+                'genre': genre,
+                'reach': round(reach, 2),
+                'percentage': round(pct, 2)
+            })
+        genre_percentages = sorted(genre_percentages, key=lambda x: x['percentage'], reverse=True)
+
+    # 4. Language reach percentage
+    lang_rows, _ = get_db_data("""
+        SELECT id, reach, languages 
+        FROM shows 
+        WHERE languages IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL
+    """)
+    
+    show_langs_map = {}
+    for show_id, reach, languages_str in lang_rows:
+        if not languages_str:
+            continue
+        parts = languages_str.split(',')
+        unique_langs = set()
+        for p in parts:
+            lang = p.strip().title()
+            if lang:
+                unique_langs.add(lang)
+        
+        show_langs_map[show_id] = (float(reach) if reach is not None else 0.0, unique_langs)
+        
+    lang_reach_map = {}
+    for show_id, (reach, langs) in show_langs_map.items():
+        for lang in langs:
+            lang_reach_map[lang] = lang_reach_map.get(lang, 0.0) + reach
+            
+    total_lang_reach = sum(lang_reach_map.values())
+    lang_percentages = []
+    if total_lang_reach > 0:
+        for lang, reach in lang_reach_map.items():
+            pct = (reach / total_lang_reach) * 100
+            lang_percentages.append({
+                'language': lang,
+                'reach': round(reach, 2),
+                'percentage': round(pct, 2)
+            })
+        lang_percentages = sorted(lang_percentages, key=lambda x: x['percentage'], reverse=True)
+
+    return render_template(
+        "analytics.html", 
+        top_shows=top_shows, 
+        platforms=platforms, 
+        formats_by_reach=formats_by_reach,
+        genre_percentages=genre_percentages, 
+        lang_percentages=lang_percentages
+    )
+
 
 import subprocess
 import sys

@@ -620,16 +620,18 @@ nav {
 
 .reach-badge {
     position: absolute;
-    bottom: 10px;
-    right: 10px;
-    background: rgba(6, 182, 212, 0.85);
-    backdrop-filter: blur(4px);
+    bottom: 12px;
+    right: 12px;
+    background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);
     color: #fff;
-    font-weight: 700;
-    font-size: 0.75rem;
-    padding: 3px 9px;
+    font-weight: 800;
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.9rem;
+    padding: 5px 12px;
     border-radius: 9999px;
+    box-shadow: 0 4px 14px rgba(6, 182, 212, 0.6);
     z-index: 2;
+    letter-spacing: 0.02em;
 }
 
 .card-info {
@@ -1122,3 +1124,80 @@ nav {
     margin: 0 auto;
     padding: 24px;
 }
+
+/* ========== ANALYTICS PAGE STYLES ========== */
+.analytics-container {
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 30px 24px;
+}
+
+.analytics-title-area {
+    margin-bottom: 30px;
+}
+
+.analytics-title-area h1 {
+    font-size: 2.2rem;
+    background: linear-gradient(135deg, #fff 40%, var(--text-secondary) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+}
+
+.analytics-title-area p {
+    color: var(--text-secondary);
+    font-size: 1rem;
+}
+
+.analytics-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+}
+
+.chart-card {
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    transition: var(--transition);
+}
+
+.chart-card:hover {
+    border-color: rgba(139, 92, 246, 0.2);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+.chart-card.full-width {
+    grid-column: 1 / -1;
+}
+
+.chart-card h3 {
+    font-size: 1.2rem;
+    font-weight: 700;
+    border-left: 4px solid var(--accent);
+    padding-left: 12px;
+    color: var(--text-primary);
+}
+
+.chart-container-inner {
+    position: relative;
+    width: 100%;
+    height: 380px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+@media (max-width: 1024px) {
+    .analytics-grid {
+        grid-template-columns: 1fr;
+    }
+    .chart-card.full-width {
+        grid-column: span 1;
+    }
+    .chart-container-inner {
+        height: 320px;
+    }
+}
+

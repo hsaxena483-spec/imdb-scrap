@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IMDB Analytics Dashboard</title>
+    <title>COTT Analytics Dashboard</title>
     <meta name="description" content="Content analytics dashboard showing trending shows, movies, and live events with platform, genre, language, and reach filters.">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -11,11 +11,12 @@
     <nav class="glass-panel">
         <div class="nav-container">
             <a href="/" class="brand">
-                <div class="brand-logo">IMDB<span>Scrap</span></div>
+                <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
             <div class="nav-links">
-                <a href="/">Dashboard</a>
-                <a href="/update" class="nav-btn">Sync IMDb Data</a>
+                <!-- <a href="/">Dashboard</a> -->
+                <a href="/analytics" style="color: var(--text-primary); background: rgba(255, 255, 255, 0.08);">Analytics</a>
+                <a href="/update" class="nav-btn">Sync COTT Data</a>
             </div>
         </div>
     </nav>
@@ -57,6 +58,37 @@
                     </div>
                 </div>
                 {% endif %}
+
+                <!-- Sports Filter -->
+                <div class="filter-group">
+                    <div class="filter-group-title" onclick="toggleFilterGroup(this)">
+                        <span>⚽ Sports</span>
+                        <span class="filter-arrow">▾</span>
+                    </div>
+                    <div class="filter-options">
+                        <label class="filter-checkbox">
+                            <input type="radio" name="sports_mode" value="" 
+                                   {% if not active_filters.sports_mode %}checked{% endif %}
+                                   onchange="document.getElementById('filterForm').submit()">
+                            <span class="checkmark radio"></span>
+                            <span>Show All (Default)</span>
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="radio" name="sports_mode" value="exclude" 
+                                   {% if active_filters.sports_mode == 'exclude' %}checked{% endif %}
+                                   onchange="document.getElementById('filterForm').submit()">
+                            <span class="checkmark radio"></span>
+                            <span>Exclude Sports</span>
+                        </label>
+                        <label class="filter-checkbox">
+                            <input type="radio" name="sports_mode" value="only" 
+                                   {% if active_filters.sports_mode == 'only' %}checked{% endif %}
+                                   onchange="document.getElementById('filterForm').submit()">
+                            <span class="checkmark radio"></span>
+                            <span>Only Sports</span>
+                        </label>
+                    </div>
+                </div>
 
                 <!-- Genre Filter -->
                 {% if filter_options.genres %}
@@ -228,7 +260,7 @@
                 <div class="gender-card glass-panel">
                     <div class="gender-card-header">
                         <span class="gender-platform-name">{{ pg.platform }}</span>
-                        <span class="gender-reach">{{ pg.total_reach }}M reach</span>
+                        <!-- <span class="gender-reach">{{ pg.total_reach }}M reach</span> -->
                     </div>
                     <div class="gender-bar-container">
                         <div class="gender-bar male" style="width: {{ pg.male_pct }}%;">
@@ -267,7 +299,7 @@
             </section>
 
             <!-- Active Filter Tags -->
-            {% set has_filters = active_filters.platform or active_filters.genre or active_filters.language or active_filters.content_type or active_filters.content_format or active_filters.paid_free or active_filters.gender or active_filters.reach_min or active_filters.reach_max %}
+            {% set has_filters = active_filters.platform or active_filters.genre or active_filters.language or active_filters.content_type or active_filters.content_format or active_filters.paid_free or active_filters.gender or active_filters.reach_min or active_filters.reach_max or active_filters.sports_mode %}
             {% if has_filters %}
             <div class="active-filters-bar">
                 <span class="active-filters-label">Active:</span>
@@ -292,6 +324,9 @@
                 {% if active_filters.gender %}
                     <span class="active-tag gender-tag-active">{{ active_filters.gender }} audience ✕</span>
                 {% endif %}
+                {% if active_filters.sports_mode %}
+                    <span class="active-tag genre-tag-active">Sports: {{ active_filters.sports_mode | title }} ✕</span>
+                {% endif %}
                 {% if active_filters.reach_min or active_filters.reach_max %}
                     <span class="active-tag reach-tag">Reach: {{ active_filters.reach_min or '0' }}–{{ active_filters.reach_max or '∞' }} ✕</span>
                 {% endif %}
@@ -306,7 +341,7 @@
                     {% for show in shows %}
                         <div class="show-card glass-panel" onclick="window.location.href='/show/{{ show.id }}'">
                             <div class="card-poster-wrapper">
-                                <span class="rank-badge">#{{ show.current_rank }}</span>
+                                <span class="rank-badge">#{{ show.display_rank }}</span>
                                 {% if show.global_rating %}
                                     <span class="rating-badge">★ {{ show.global_rating }}</span>
                                 {% endif %}
@@ -348,7 +383,7 @@
                                 <!-- Genres -->
                                 {% if show.genres %}
                                     <div class="card-genres">
-                                        {% for genre in show.genres[:3] %}
+                                        {% for genre in show.genres %}
                                             <span class="genre-tag">{{ genre }}</span>
                                         {% endfor %}
                                     </div>
