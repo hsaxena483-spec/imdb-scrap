@@ -328,6 +328,20 @@ def read_excel_shows(filepath):
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb[wb.sheetnames[0]]  # Use first sheet
     
+    # Save metadata (week/time period and market) to metadata.json
+    time_period = ws.cell(row=1, column=6).value
+    market = ws.cell(row=7, column=2).value or "ALL INDIA"
+    if time_period:
+        try:
+            with open("metadata.json", "w") as f:
+                json.dump({
+                    "time_period": str(time_period).strip(),
+                    "market": str(market).strip()
+                }, f)
+            print(f"Saved metadata: {time_period} | {market}")
+        except Exception as e:
+            print(f"Warning: Could not save metadata.json: {e}")
+            
     shows = []
     # Data rows start at row 7
     for row in range(7, ws.max_row + 1):
@@ -410,7 +424,7 @@ def search_imdb_show(driver, title):
         return None
 
 def main():
-    print("IMDb Show Scraper Initialization...")
+    print("IMDb Show Scraper & Importer Initialization...")
     
     # Create a lock file to indicate that the scraper is active
     with open("scraper.lock", "w") as f:
@@ -419,342 +433,448 @@ def main():
     # Make sure tables exist
     db.init_db()
     
-    # Determine source: Excel file or TV Meter chart
-    excel_file = sys.argv[1] if len(sys.argv) > 1 else EXCEL_FILE
+    # Determine import path (argument directory or default)
+    import_path = sys.argv[1] if len(sys.argv) > 1 else None
     
-    if excel_file and os.path.exists(excel_file):
-        print(f"Reading show list from Excel: {excel_file}")
-        excel_shows, platform_gender = read_excel_shows(excel_file)
-        print(f"Found {len(excel_shows)} shows and {len(platform_gender)} platform records in Excel.")
+    # Proactively check data_input directory if no argument is passed
+    if not import_path:
+        if os.path.exists("data_input") and os.path.isdir("data_input"):
+            import_path = "data_input"
+            
+    excel_files = []
+    if import_path:
+        if os.path.isdir(import_path):
+            # It's a directory! Scan for all .xlsx files
+            for f in os.listdir(import_path):
+                if f.endswith(".xlsx") and not f.startswith("~$"):
+                    excel_files.append(os.path.join(import_path, f))
+        elif os.path.isfile(import_path) and import_path.endswith(".xlsx"):
+            excel_files.append(import_path)
+            
+    # Fallback to default single Excel file if no directory files found
+    if not excel_files and os.path.exists(EXCEL_FILE):
+        excel_files.append(EXCEL_FILE)
         
-        # Save platform gender data first
-        conn, is_sqlite = db.get_connection()
-        try:
-            for pg in platform_gender:
-                db.save_platform_gender(conn, is_sqlite, pg)
-            conn.commit()
-            print(f"Saved {len(platform_gender)} platform gender records.")
-        except Exception as e:
-            conn.rollback()
-            print(f"Warning: Failed to save platform gender data: {e}")
-        finally:
-            conn.close()
-    else:
-        print(f"Excel file not found at {excel_file}. Defaulting to TV Meter chart.")
-        excel_shows = None
-        platform_gender = None
-    
-    # Start web driver
-    print("Starting Selenium Headless Web Browser...")
-    driver = init_driver()
-    
-    try:
-        # Connect to DB once for the session
-        conn, is_sqlite = db.get_connection()
+    if excel_files:
+        print(f"Found {len(excel_files)} Excel files to process.")
         
-        try:
-            if excel_shows:
-                # EXCEL MODE: Search each show on IMDb and scrape details
-                shows_to_scrape = excel_shows
-                print(f"Will scrape {len(shows_to_scrape)} shows from Excel on IMDb.")
+        # Load week codes to sort chronologically
+        files_with_weeks = []
+        for filepath in excel_files:
+            try:
+                wb = openpyxl.load_workbook(filepath, read_only=True)
+                ws = wb[wb.sheetnames[0]]
+                # Try to find week code in data cells first (row 7 column 1)
+                week_code = ws.cell(row=7, column=1).value
+                if not week_code:
+                    # Try searching rows 7 to 15
+                    for r in range(7, 15):
+                        val = ws.cell(row=r, column=1).value
+                        if val:
+                            week_code = val
+                            break
+                # If still not found, try sheet title or metadata cell (1, 6)
+                if not week_code:
+                    week_code = ws.cell(row=1, column=6).value
+                    
+                files_with_weeks.append((filepath, week_code))
+                wb.close()
+            except Exception as e:
+                print(f"Warning: Could not read week code from {filepath}: {e}")
+                files_with_weeks.append((filepath, "WK-00, 2026"))
                 
-                # Clear old ranks and bulk-save all ranks first
-                print("Updating show rankings in database...")
+        # Sort by week code chronologically
+        def parse_week_sort_key(item):
+            filepath, week_code = item
+            if not week_code:
+                return (0, 0)
+            import re
+            # Extract WK-XX and Year
+            match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(week_code))
+            if match:
+                return (int(match.group(2)), int(match.group(1)))
+            return (0, 0)
+            
+        files_with_weeks.sort(key=parse_week_sort_key)
+        sorted_files = [item[0] for item in files_with_weeks]
+        
+        print("Sorted Excel files chronologically:")
+        for idx, f in enumerate(sorted_files, 1):
+            print(f"  {idx}. {f} (Week: {files_with_weeks[idx-1][1]})")
+            
+        # Connect to DB
+        conn, is_sqlite = db.get_connection()
+        driver = None
+        
+        latest_time_period = None
+        latest_market = "ALL INDIA"
+        
+        try:
+            for filepath in sorted_files:
+                print(f"\n=========================================")
+                print(f"Processing File: {filepath}")
+                print(f"=========================================")
+                
+                # Load metadata
                 try:
-                    db.clear_all_ranks(conn, is_sqlite)
+                    wb_meta = openpyxl.load_workbook(filepath, data_only=True)
+                    ws_meta = wb_meta[wb_meta.sheetnames[0]]
+                    time_period = ws_meta.cell(row=1, column=6).value
+                    market = ws_meta.cell(row=7, column=2).value or "ALL INDIA"
+                    if time_period:
+                        latest_time_period = str(time_period).strip()
+                    if market:
+                        latest_market = str(market).strip()
+                    wb_meta.close()
+                except Exception as meta_err:
+                    print(f"Warning: Could not read metadata cell: {meta_err}")
+                
+                # Load shows from this file
+                excel_shows, platform_gender = read_excel_shows(filepath)
+                print(f"Loaded {len(excel_shows)} shows from {filepath}.")
+                
+                # Save platform gender
+                try:
+                    for pg in platform_gender:
+                        db.save_platform_gender(conn, is_sqlite, pg)
                     conn.commit()
+                    print(f"Saved platform gender records.")
                 except Exception as e:
                     conn.rollback()
-                    print(f"Warning: Could not clear rankings: {e}")
-                
-                for i, excel_show in enumerate(shows_to_scrape, 1):
+                    print(f"Warning: Failed to save platform gender: {e}")
+                    
+                # Loop through shows
+                for i, excel_show in enumerate(excel_shows, 1):
                     title = excel_show['title']
-                    print(f"\n--- [{i}/{len(shows_to_scrape)}] Searching IMDb for: {title} ---")
+                    week_code = excel_show.get('week') or "WK-26,2026"
                     
-                    # Search IMDb for this title
-                    show_id = search_imdb_show(driver, title)
+                    # 1. Check if show already exists in db by title
+                    existing_id = None
+                    cursor = conn.cursor()
+                    query_check = "SELECT id FROM shows WHERE LOWER(TRIM(title)) = %s LIMIT 1"
+                    if is_sqlite:
+                        query_check = query_check.replace("%s", "?")
+                    try:
+                        cursor.execute(query_check, (title.lower().strip(),))
+                        row = cursor.fetchone()
+                        if row:
+                            existing_id = row[0]
+                    except Exception as e:
+                        print(f"Error checking show existence: {e}")
                     
-                    if not show_id:
-                        print(f"  Could not find '{title}' on IMDb. Saving with Excel data only.")
-                        # Save with Excel data only (no IMDb details)
-                        show_data = {
-                            'id': f'xl_{i}',  # Generate a placeholder ID
-                            'title': title,
-                            'type': excel_show.get('content_type'),
-                            'release_year': None,
-                            'end_year': None,
-                            'global_rating': None,
-                            'global_vote_count': None,
-                            'runtime_seconds': None,
-                            'certificate': None,
-                            'plot': None,
-                            'poster_url': None,
-                            'release_date': excel_show.get('release_date'),
-                            'total_episodes': None,
-                            'creators': None,
-                            'stars': None,
-                            'current_rank': excel_show.get('current_rank'),
-                            'platform': excel_show.get('platform'),
-                            'content_format': excel_show.get('content_format'),
-                            'paid_free': excel_show.get('paid_free'),
-                            'content_type': excel_show.get('content_type'),
-                            'languages': excel_show.get('languages'),
-                            'reach': excel_show.get('reach'),
-                            'week': excel_show.get('week'),
-                            'market': excel_show.get('market'),
-                        }
-                        try:
-                            db.save_show(conn, is_sqlite, show_data)
-                            db.save_genres(conn, is_sqlite, show_data['id'], excel_show.get('genres', []))
-                            conn.commit()
-                            print(f"  Saved '{title}' with Excel data only.")
-                        except Exception as e:
-                            conn.rollback()
-                            print(f"  Error saving '{title}': {e}")
-                        continue
+                    show_id = existing_id
                     
-                    print(f"  Found IMDb ID: {show_id}")
-                    
-                    # Check freshness
-                    if db.is_show_fresh(conn, is_sqlite, show_id):
-                        print(f"  Data is already fresh. Updating Excel metadata only.")
-                        # Just update the Excel-specific fields
-                        show_data = {
-                            'id': show_id,
-                            'title': title,
-                            'type': None,
-                            'release_year': None,
-                            'end_year': None,
-                            'global_rating': None,
-                            'global_vote_count': None,
-                            'runtime_seconds': None,
-                            'certificate': None,
-                            'plot': None,
-                            'poster_url': None,
-                            'release_date': excel_show.get('release_date'),
-                            'total_episodes': None,
-                            'creators': None,
-                            'stars': None,
-                            'current_rank': excel_show.get('current_rank'),
-                            'platform': excel_show.get('platform'),
-                            'content_format': excel_show.get('content_format'),
-                            'paid_free': excel_show.get('paid_free'),
-                            'content_type': excel_show.get('content_type'),
-                            'languages': excel_show.get('languages'),
-                            'reach': excel_show.get('reach'),
-                            'week': excel_show.get('week'),
-                            'market': excel_show.get('market'),
-                        }
-                        try:
-                            db.save_show(conn, is_sqlite, show_data)
-                            db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
-                            conn.commit()
-                        except Exception as e:
-                            conn.rollback()
-                            print(f"  Error updating Excel metadata: {e}")
-                        continue
-                    
-                    # Fetch detail page from IMDb
-                    detail_url = f"https://www.imdb.com/title/{show_id}/"
-                    detail_json = get_next_data(driver, detail_url)
-                    
-                    # Parse IMDb detail data
-                    imdb_data = {}
-                    imdb_genres = []
-                    if detail_json:
-                        # Try to extract data from the detail page
-                        page_props = detail_json.get('props', {}).get('pageProps', {})
-                        above_fold = page_props.get('aboveTheFoldData', {})
-                        main_data = page_props.get('mainColumnData', {})
+                    if show_id:
+                        print(f"  [{i}/{len(excel_shows)}] Show '{title}' exists in DB (ID: {show_id}). Skipping IMDb scrape.")
+                    else:
+                        print(f"  [{i}/{len(excel_shows)}] Show '{title}' is NEW. Searching on IMDb...")
                         
-                        if above_fold:
-                            ratings = above_fold.get('ratingsSummary', {})
-                            imdb_data['global_rating'] = ratings.get('aggregateRating')
-                            imdb_data['global_vote_count'] = ratings.get('voteCount')
+                        # Start driver on-demand (lazy load)
+                        if not driver:
+                            print("  Lazy loading headless Chrome webdriver...")
+                            driver = init_driver()
                             
-                            cert = above_fold.get('certificate', {})
-                            imdb_data['certificate'] = cert.get('rating') if cert else None
+                        # Search IMDb
+                        show_id = search_imdb_show(driver, title)
+                        
+                        if show_id:
+                            print(f"    Found IMDb ID: {show_id}")
+                            # Scrape details
+                            detail_url = f"https://www.imdb.com/title/{show_id}/"
+                            detail_json = get_next_data(driver, detail_url)
                             
-                            runtime_obj = above_fold.get('runtime', {})
-                            imdb_data['runtime_seconds'] = runtime_obj.get('seconds') if runtime_obj else None
+                            imdb_data = {}
+                            imdb_genres = []
+                            if detail_json:
+                                page_props = detail_json.get('props', {}).get('pageProps', {})
+                                above_fold = page_props.get('aboveTheFoldData', {})
+                                if above_fold:
+                                    ratings = above_fold.get('ratingsSummary', {})
+                                    imdb_data['global_rating'] = ratings.get('aggregateRating')
+                                    imdb_data['global_vote_count'] = ratings.get('voteCount')
+                                    
+                                    cert = above_fold.get('certificate', {})
+                                    imdb_data['certificate'] = cert.get('rating') if cert else None
+                                    
+                                    runtime_obj = above_fold.get('runtime', {})
+                                    imdb_data['runtime_seconds'] = runtime_obj.get('seconds') if runtime_obj else None
+                                    
+                                    release_year_obj = above_fold.get('releaseYear', {})
+                                    imdb_data['release_year'] = release_year_obj.get('year') if release_year_obj else None
+                                    imdb_data['end_year'] = release_year_obj.get('endYear') if release_year_obj else None
+                                    
+                                    title_type = above_fold.get('titleType', {})
+                                    imdb_data['type'] = title_type.get('id') if title_type else None
+                                    
+                                    plot_obj = above_fold.get('plot', {})
+                                    if plot_obj:
+                                        plot_text = plot_obj.get('plotText', {})
+                                        imdb_data['plot'] = plot_text.get('plainText') if plot_text else None
+                                    
+                                    img = above_fold.get('primaryImage', {})
+                                    imdb_data['poster_url'] = img.get('url') if img else None
+                                    
+                                    # Parse genres
+                                    genres_obj = above_fold.get('genres', {}).get('genres', [])
+                                    for g in genres_obj:
+                                        g_text = g.get('text')
+                                        if g_text:
+                                            imdb_genres.append(g_text)
+                                            
+                                    # Parse creators and stars
+                                    # IMDb uses principalCreditsV2 in aboveTheFoldData (grouping.text)
+                                    creators_list = []
+                                    stars_list = []
+
+                                    for credit in above_fold.get('principalCreditsV2', []):
+                                        grouping_text = credit.get('grouping', {}).get('text', '').lower()
+                                        names = [c.get('name', {}).get('nameText', {}).get('text', '') for c in credit.get('credits', [])]
+                                        names = [n for n in names if n]
+                                        if 'creator' in grouping_text or 'director' in grouping_text or 'writer' in grouping_text:
+                                            creators_list.extend(names)
+                                        elif 'star' in grouping_text or 'cast' in grouping_text or 'actor' in grouping_text:
+                                            stars_list.extend(names)
+
+                                    # Fallback: mainColumnData principalCredits (category.text)
+                                    if not creators_list and not stars_list:
+                                        main_col_data = page_props.get('mainColumnData', {})
+                                        for credit in main_col_data.get('principalCredits', []):
+                                            category = credit.get('category', {}).get('text', '').lower()
+                                            names = [c.get('name', {}).get('nameText', {}).get('text', '') for c in credit.get('credits', [])]
+                                            names = [n for n in names if n]
+                                            if 'creator' in category or 'director' in category or 'writer' in category:
+                                                creators_list.extend(names)
+                                            elif 'star' in category or 'cast' in category or 'actor' in category:
+                                                stars_list.extend(names)
+
+                                    imdb_data['creators'] = ', '.join(creators_list) if creators_list else None
+                                    imdb_data['stars'] = ', '.join(stars_list) if stars_list else None
+                                    
+
+                            # Fetch country ratings & reviews
+                            ratings_url = f"https://www.imdb.com/title/{show_id}/ratings/"
+                            ratings_json = get_next_data(driver, ratings_url)
+                            country_ratings = extract_country_ratings(ratings_json)
                             
-                            release_year_obj = above_fold.get('releaseYear', {})
-                            imdb_data['release_year'] = release_year_obj.get('year') if release_year_obj else None
-                            imdb_data['end_year'] = release_year_obj.get('endYear') if release_year_obj else None
+                            reviews_url = f"https://www.imdb.com/title/{show_id}/reviews/"
+                            try: driver.delete_all_cookies()
+                            except Exception: pass
+                            reviews_json = get_next_data(driver, reviews_url)
+                            reviews = extract_reviews(reviews_json)
                             
-                            title_type = above_fold.get('titleType', {})
-                            imdb_data['type'] = title_type.get('id') if title_type else None
-                            
-                            plot_obj = above_fold.get('plot', {})
-                            if plot_obj:
-                                plot_text = plot_obj.get('plotText', {})
-                                imdb_data['plot'] = plot_text.get('plainText') if plot_text else None
-                            
-                            img = above_fold.get('primaryImage', {})
-                            imdb_data['poster_url'] = img.get('url') if img else None
-                            
-                            # Parse genres from IMDb
-                            genres_obj = above_fold.get('genres', {}).get('genres', [])
-                            for g in genres_obj:
-                                g_text = g.get('text')
-                                if g_text:
-                                    imdb_genres.append(g_text)
-                            
-                            # Parse creators and stars
-                            creators_list = []
-                            stars_list = []
-                            for credit in above_fold.get('principalCredits', []):
-                                category = credit.get('category', {}).get('text', '').lower()
-                                names = [c.get('name', {}).get('nameText', {}).get('text', '') for c in credit.get('credits', [])]
-                                names = [n for n in names if n]
-                                if 'creator' in category or 'director' in category:
-                                    creators_list.extend(names)
-                                elif 'star' in category:
-                                    stars_list.extend(names)
-                            
-                            imdb_data['creators'] = ', '.join(creators_list) if creators_list else None
-                            imdb_data['stars'] = ', '.join(stars_list) if stars_list else None
-                    
-                    # Build combined show data
-                    show_data = {
-                        'id': show_id,
-                        'title': title,
-                        'type': imdb_data.get('type', excel_show.get('content_type')),
-                        'release_year': imdb_data.get('release_year'),
-                        'end_year': imdb_data.get('end_year'),
-                        'global_rating': imdb_data.get('global_rating'),
-                        'global_vote_count': imdb_data.get('global_vote_count'),
-                        'runtime_seconds': imdb_data.get('runtime_seconds'),
-                        'certificate': imdb_data.get('certificate'),
-                        'plot': imdb_data.get('plot'),
-                        'poster_url': imdb_data.get('poster_url'),
-                        'release_date': excel_show.get('release_date'),
-                        'total_episodes': None,
-                        'creators': imdb_data.get('creators'),
-                        'stars': imdb_data.get('stars'),
+                            # Save static details
+                            show_data = {
+                                'id': show_id,
+                                'title': title,
+                                'type': imdb_data.get('type', excel_show.get('content_type')),
+                                'release_year': imdb_data.get('release_year'),
+                                'end_year': imdb_data.get('end_year'),
+                                'global_rating': imdb_data.get('global_rating'),
+                                'global_vote_count': imdb_data.get('global_vote_count'),
+                                'runtime_seconds': imdb_data.get('runtime_seconds'),
+                                'certificate': imdb_data.get('certificate'),
+                                'plot': imdb_data.get('plot'),
+                                'poster_url': imdb_data.get('poster_url'),
+                                'release_date': excel_show.get('release_date'),
+                                'total_episodes': None,
+                                'creators': imdb_data.get('creators'),
+                                'stars': imdb_data.get('stars'),
+                                'current_rank': excel_show.get('current_rank'),
+                                'platform': excel_show.get('platform'),
+                                'content_format': excel_show.get('content_format'),
+                                'paid_free': excel_show.get('paid_free'),
+                                'content_type': excel_show.get('content_type'),
+                                'languages': excel_show.get('languages'),
+                                'reach': excel_show.get('reach'),
+                                'week': excel_show.get('week'),
+                                'market': excel_show.get('market'),
+                            }
+                            try:
+                                db.save_show(conn, is_sqlite, show_data)
+                                all_genres = list(set(excel_show.get('genres', []) + imdb_genres))
+                                db.save_genres(conn, is_sqlite, show_id, all_genres)
+                                db.save_country_ratings(conn, is_sqlite, show_id, country_ratings)
+                                db.save_reviews(conn, is_sqlite, show_id, reviews)
+                                conn.commit()
+                                print(f"    Successfully scraped and saved '{title}' details to DB.")
+                            except Exception as save_err:
+                                conn.rollback()
+                                print(f"    Error saving scraped data for '{title}': {save_err}")
+                        else:
+                            print(f"    IMDb search failed for '{title}'. Saving with Excel details only.")
+                            import hashlib
+                            show_id = "xl_" + hashlib.md5(title.lower().strip().encode('utf-8')).hexdigest()[:10]
+                            show_data = {
+                                'id': show_id,
+                                'title': title,
+                                'type': excel_show.get('content_type'),
+                                'release_year': None,
+                                'end_year': None,
+                                'global_rating': None,
+                                'global_vote_count': None,
+                                'runtime_seconds': None,
+                                'certificate': None,
+                                'plot': None,
+                                'poster_url': None,
+                                'release_date': excel_show.get('release_date'),
+                                'total_episodes': None,
+                                'creators': None,
+                                'stars': None,
+                                'current_rank': excel_show.get('current_rank'),
+                                'platform': excel_show.get('platform'),
+                                'content_format': excel_show.get('content_format'),
+                                'paid_free': excel_show.get('paid_free'),
+                                'content_type': excel_show.get('content_type'),
+                                'languages': excel_show.get('languages'),
+                                'reach': excel_show.get('reach'),
+                                'week': excel_show.get('week'),
+                                'market': excel_show.get('market'),
+                            }
+                            try:
+                                db.save_show(conn, is_sqlite, show_data)
+                                db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
+                                conn.commit()
+                                print(f"    Saved '{title}' (unmapped) to DB.")
+                            except Exception as save_err:
+                                conn.rollback()
+                                print(f"    Error saving unmapped show '{title}': {save_err}")
+                                
+                    # 2. Save the weekly ranking
+                    weekly_ranking = {
+                        'show_id': show_id,
+                        'week': week_code,
                         'current_rank': excel_show.get('current_rank'),
+                        'reach': excel_show.get('reach'),
                         'platform': excel_show.get('platform'),
                         'content_format': excel_show.get('content_format'),
                         'paid_free': excel_show.get('paid_free'),
                         'content_type': excel_show.get('content_type'),
-                        'languages': excel_show.get('languages'),
-                        'reach': excel_show.get('reach'),
-                        'week': excel_show.get('week'),
-                        'market': excel_show.get('market'),
+                        'market': excel_show.get('market')
                     }
-                    
-                    # Fetch country ratings
-                    ratings_url = f"https://www.imdb.com/title/{show_id}/ratings/"
-                    ratings_json = get_next_data(driver, ratings_url)
-                    country_ratings = extract_country_ratings(ratings_json)
-                    print(f"  Found {len(country_ratings)} country-specific ratings.")
-                    
-                    # Fetch reviews
-                    reviews_url = f"https://www.imdb.com/title/{show_id}/reviews/"
                     try:
-                        driver.delete_all_cookies()
-                    except Exception:
-                        pass
-                    reviews_json = get_next_data(driver, reviews_url)
-                    reviews = extract_reviews(reviews_json)
-                    print(f"  Found {len(reviews)} reviews.")
-                    
-                    # Save everything to DB
-                    try:
-                        db.save_show(conn, is_sqlite, show_data)
-                        # Use Excel genres since they're from the source data
-                        all_genres = excel_show.get('genres', [])
-                        if imdb_genres:
-                            # Merge IMDb genres too
-                            all_genres = list(set(all_genres + imdb_genres))
-                        db.save_genres(conn, is_sqlite, show_id, all_genres)
-                        db.save_country_ratings(conn, is_sqlite, show_id, country_ratings)
-                        db.save_reviews(conn, is_sqlite, show_id, reviews)
+                        db.save_weekly_ranking(conn, is_sqlite, weekly_ranking)
+                        
+                        # Also update shows table fields with the latest rank/reach to preserve backward compatibility
+                        update_query = """
+                        UPDATE shows SET 
+                            current_rank = %s, reach = %s, week = %s, platform = %s,
+                            content_format = %s, paid_free = %s, content_type = %s, market = %s
+                        WHERE id = %s
+                        """
+                        if is_sqlite:
+                            update_query = update_query.replace("%s", "?")
+                        cursor = conn.cursor()
+                        cursor.execute(update_query, (
+                            excel_show.get('current_rank'),
+                            excel_show.get('reach'),
+                            week_code,
+                            excel_show.get('platform'),
+                            excel_show.get('content_format'),
+                            excel_show.get('paid_free'),
+                            excel_show.get('content_type'),
+                            excel_show.get('market'),
+                            show_id
+                        ))
                         conn.commit()
-                        print(f"  Successfully saved {title} data to database.")
-                    except Exception as e:
+                    except Exception as wr_err:
                         conn.rollback()
-                        print(f"  Error saving {title}: {e}")
-            else:
-                # TV METER MODE (original behavior)
-                chart_url = "https://www.imdb.com/chart/tvmeter/"
-                print("Fetching trending TV shows from IMDb TV Meter...")
-                chart_json = get_next_data(driver, chart_url)
-                
-                if not chart_json:
-                    print("Error: Could not retrieve TV Meter data. Aborting.")
-                    return
-                    
-                shows = extract_tv_shows_list(chart_json)
-                print(f"Extracted {len(shows)} shows from chart list.")
-                
-                if not shows:
-                    print("Error: No shows could be parsed. Aborting.")
-                    return
-                    
-                shows_to_scrape = shows[:SCRAPE_LIMIT]
-                print(f"Configured to scrape details for {len(shows_to_scrape)} shows (SCRAPE_LIMIT = {SCRAPE_LIMIT}).")
-                
-                print("Updating show rankings in database...")
+                        print(f"  Error saving weekly ranking: {wr_err}")
+            
+            # Save the latest metadata after importing all files
+            if latest_time_period:
                 try:
-                    db.clear_all_ranks(conn, is_sqlite)
-                    for show in shows_to_scrape:
-                        db.save_show(conn, is_sqlite, show)
-                    conn.commit()
-                    print(f"  Updated ranks for {len(shows_to_scrape)} shows.")
-                except Exception as rank_err:
-                    conn.rollback()
-                    print(f"Warning: Could not update rankings: {rank_err}")
-                
-                for i, show in enumerate(shows_to_scrape, 1):
-                    show_id = show['id']
-                    title = show['title']
-                    
-                    if db.is_show_fresh(conn, is_sqlite, show_id):
-                        print(f"\n--- [{i}/{len(shows_to_scrape)}] Skipping {title} ({show_id}) - Data is already fresh ---")
-                        try:
-                            db.save_show(conn, is_sqlite, show)
-                            conn.commit()
-                        except Exception as e:
-                            conn.rollback()
-                        continue
-                        
-                    print(f"\n--- [{i}/{len(shows_to_scrape)}] Processing show: {title} ({show_id}) ---")
-                    
-                    ratings_url = f"https://www.imdb.com/title/{show_id}/ratings/"
-                    ratings_json = get_next_data(driver, ratings_url)
-                    country_ratings = extract_country_ratings(ratings_json)
-                    print(f"  Found {len(country_ratings)} country-specific rating records.")
-                    
-                    reviews_url = f"https://www.imdb.com/title/{show_id}/reviews/"
-                    try:
-                        driver.delete_all_cookies()
-                    except Exception:
-                        pass
-                    reviews_json = get_next_data(driver, reviews_url)
-                    reviews = extract_reviews(reviews_json)
-                    print(f"  Found {len(reviews)} reviews.")
-                    
-                    try:
-                        db.save_show(conn, is_sqlite, show)
-                        db.save_genres(conn, is_sqlite, show_id, show['genres'])
-                        db.save_country_ratings(conn, is_sqlite, show_id, country_ratings)
-                        db.save_reviews(conn, is_sqlite, show_id, reviews)
-                        conn.commit()
-                        print(f"  Successfully saved {title} data to the database.")
-                    except Exception as e:
-                        conn.rollback()
-                        print(f"  Error: Failed to save {title} data to DB: {e}")
-                        
-            print("\nIMDb Scraping process finished successfully.")
+                    with open("metadata.json", "w") as f:
+                        json.dump({
+                            "time_period": latest_time_period,
+                            "market": latest_market
+                        }, f)
+                    print(f"\nSaved latest metadata: {latest_time_period} | {latest_market}")
+                except Exception as meta_err:
+                    print(f"Warning: Failed to save metadata.json: {meta_err}")
+            
+            print("\nExcel Import process finished successfully.")
         finally:
             conn.close()
-            print("Database connection closed.")
-    finally:
-        driver.quit()
-        print("Headless browser closed.")
-        if os.path.exists("scraper.lock"):
-            os.remove("scraper.lock")
+            if driver:
+                driver.quit()
+                print("Headless browser closed.")
+    else:
+        # TV METER MODE (original behavior)
+        chart_url = "https://www.imdb.com/chart/tvmeter/"
+        print("Fetching trending TV shows from IMDb TV Meter...")
+        driver = init_driver()
+        try:
+            chart_json = get_next_data(driver, chart_url)
+            if not chart_json:
+                print("Error: Could not retrieve TV Meter data. Aborting.")
+                return
+                
+            shows = extract_tv_shows_list(chart_json)
+            print(f"Extracted {len(shows)} shows from chart list.")
+            if not shows:
+                print("Error: No shows could be parsed. Aborting.")
+                return
+                
+            shows_to_scrape = shows[:SCRAPE_LIMIT]
+            print(f"Configured to scrape details for {len(shows_to_scrape)} shows (SCRAPE_LIMIT = {SCRAPE_LIMIT}).")
+            
+            conn, is_sqlite = db.get_connection()
+            try:
+                db.clear_all_ranks(conn, is_sqlite)
+                for show in shows_to_scrape:
+                    db.save_show(conn, is_sqlite, show)
+                conn.commit()
+                print(f"  Updated ranks for {len(shows_to_scrape)} shows.")
+            except Exception as rank_err:
+                conn.rollback()
+                print(f"Warning: Could not update rankings: {rank_err}")
+            
+            for i, show in enumerate(shows_to_scrape, 1):
+                show_id = show['id']
+                title = show['title']
+                
+                if db.is_show_fresh(conn, is_sqlite, show_id):
+                    print(f"\n--- [{i}/{len(shows_to_scrape)}] Skipping {title} ({show_id}) - Data is already fresh ---")
+                    try:
+                        db.save_show(conn, is_sqlite, show)
+                        conn.commit()
+                    except Exception as e:
+                        conn.rollback()
+                    continue
+                    
+                print(f"\n--- [{i}/{len(shows_to_scrape)}] Processing show: {title} ({show_id}) ---")
+                
+                ratings_url = f"https://www.imdb.com/title/{show_id}/ratings/"
+                ratings_json = get_next_data(driver, ratings_url)
+                country_ratings = extract_country_ratings(ratings_json)
+                print(f"  Found {len(country_ratings)} country-specific rating records.")
+                
+                reviews_url = f"https://www.imdb.com/title/{show_id}/reviews/"
+                try:
+                    driver.delete_all_cookies()
+                except Exception:
+                    pass
+                reviews_json = get_next_data(driver, reviews_url)
+                reviews = extract_reviews(reviews_json)
+                
+                try:
+                    db.save_show(conn, is_sqlite, show)
+                    db.save_genres(conn, is_sqlite, show_id, show['genres'])
+                    db.save_country_ratings(conn, is_sqlite, show_id, country_ratings)
+                    db.save_reviews(conn, is_sqlite, show_id, reviews)
+                    conn.commit()
+                    print(f"  Successfully saved {title} data to the database.")
+                except Exception as e:
+                    conn.rollback()
+                    print(f"  Error: Failed to save {title} data to DB: {e}")
+            print("\nIMDb TV Meter Scraping process finished successfully.")
+        finally:
+            driver.quit()
+            conn.close()
+            print("Database connection & browser closed.")
+
+    if os.path.exists("scraper.lock"):
+        os.remove("scraper.lock")
 
 if __name__ == "__main__":
     main()

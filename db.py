@@ -169,6 +169,23 @@ def init_db():
             female_pct NUMERIC(5, 3)
         );
         """)
+
+        # 6. Create show_weekly_rankings table
+        print("Creating table: show_weekly_rankings...")
+        execute_query(conn, is_sqlite, """
+        CREATE TABLE IF NOT EXISTS show_weekly_rankings (
+            show_id VARCHAR(15) REFERENCES shows(id) ON DELETE CASCADE,
+            week VARCHAR(50),
+            current_rank INTEGER,
+            reach NUMERIC(10, 5),
+            platform VARCHAR(100),
+            content_format VARCHAR(100),
+            paid_free VARCHAR(20),
+            content_type VARCHAR(50),
+            market VARCHAR(50),
+            PRIMARY KEY (show_id, week)
+        );
+        """)
         
         if is_sqlite:
             conn.commit()
@@ -354,6 +371,37 @@ def get_all_platform_gender(conn, is_sqlite):
     query = "SELECT platform, total_reach, male_pct, female_pct FROM platform_gender ORDER BY total_reach DESC"
     cursor = execute_query(conn, is_sqlite, query)
     return cursor.fetchall()
+
+def save_weekly_ranking(conn, is_sqlite, ranking_data):
+    """
+    Saves or updates a show's weekly ranking in the show_weekly_rankings table.
+    """
+    query = """
+    INSERT INTO show_weekly_rankings (
+        show_id, week, current_rank, reach, platform, content_format, paid_free, content_type, market
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s
+    ) ON CONFLICT (show_id, week) DO UPDATE SET
+        current_rank = EXCLUDED.current_rank,
+        reach = EXCLUDED.reach,
+        platform = EXCLUDED.platform,
+        content_format = EXCLUDED.content_format,
+        paid_free = EXCLUDED.paid_free,
+        content_type = EXCLUDED.content_type,
+        market = EXCLUDED.market;
+    """
+    params = (
+        ranking_data.get('show_id'),
+        ranking_data.get('week'),
+        ranking_data.get('current_rank'),
+        ranking_data.get('reach'),
+        ranking_data.get('platform'),
+        ranking_data.get('content_format'),
+        ranking_data.get('paid_free'),
+        ranking_data.get('content_type'),
+        ranking_data.get('market')
+    )
+    execute_query(conn, is_sqlite, query, params)
 
 if __name__ == "__main__":
     init_db()

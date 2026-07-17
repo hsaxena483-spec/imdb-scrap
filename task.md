@@ -1,15 +1,28 @@
-# Tasks
+# Tasks Checklist - Multi-Week Trend Analysis
 
-- [x] Implement Scraper Enhancements
-  - [x] Add `is_show_fresh` check in `db.py`
-  - [x] Configure eager loading and block images in Chrome options in `scraper.py`
-  - [x] Implement database connection reuse in `scraper.py` (open once, close at end)
-  - [x] Integrate resumability skip logic in `scraper.py`
-- [x] Implement Flask Web Dashboard
-  - [x] Build Flask routing server in `app.py`
-  - [x] Create core dark-mode/glassmorphic CSS styles in `static/style.css`
-  - [x] Build home dashboard template in `templates/index.html`
-  - [x] Build single show detail page in `templates/show.html`
+- [x] Create Input Directory and Setup Database Migrations
+  - [x] Create `data_input/` directory
+  - [x] Add `show_weekly_rankings` table in `db.py`
+  - [x] Modify `db.py` queries and save functions (save static details vs weekly rankings)
+- [x] Implement Hybrid Importer in `scraper.py`
+  - [x] Parse time period and market from Excel files
+  - [x] Sort Excel files chronologically by week code
+  - [x] Check DB for show existence before IMDb search/scraping
+  - [x] Generate consistent title hashes (`xl_<hash>`) for unmapped shows
+  - [x] Import and save weekly rankings
+- [x] Enhance Dashboard Routes in `app.py`
+  - [x] Add `/trending` page route
+  - [x] Add `/api/show_trends` API endpoint
+  - [x] Add `/api/content_trends` and `/api/genre_trends` API endpoints
+  - [x] Update `/show/<show_id>` route to fetch and return weekly trend history
+  - [x] Update `/analytics` route to accept a `week` query parameter for snapshots
+- [x] Build Front-End Templates
+  - [x] Create `templates/trending.html` with Trend Line Charts (Show, Platform, Format, Genre)
+  - [x] Update `templates/show.html` to render individual show rank/reach trend line charts
+  - [x] Update `templates/analytics.html` with a week selector dropdown
+  - [x] Update navigation headers in all templates to include `/trending`
 - [x] Verify Implementation
-  - [x] Verify scraper skips already fresh records (resumability)
-  - [x] Start Flask server and test UI pages in browser
+  - [x] Run syntax checks on all python files
+  - [x] Test the database migration
+  - [x] Verify directory import on sample Excel sheets
+  - [x] Test dashboard trending, analytics, and detail pages in browser

@@ -8,6 +8,37 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <!-- Load Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .selector-box {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        .selector-box label {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        .custom-select {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            min-width: 200px;
+            outline: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .custom-select:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }
+    </style>
 </head>
 <body>
     <nav class="glass-panel">
@@ -16,8 +47,9 @@
                 <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
             <div class="nav-links">
-                <!-- <a href="/">Dashboard</a> -->
+                <a href="/">Home</a>
                 <a href="/analytics" style="color: var(--text-primary); background: rgba(255, 255, 255, 0.08);">Analytics</a>
+                <a href="/trending">Trending</a>
                 <a href="/update" class="nav-btn">Sync COTT Data</a>
             </div>
         </div>
@@ -26,15 +58,29 @@
     <main class="analytics-container">
         <header class="analytics-title-area">
             <h1>Content Analytics Dashboard</h1>
-            <p>Visualizing reach, ratings, genres, languages, and platforms across trending IMDb content.</p>
+            <p>Visualizing reach, ratings, platforms, formats, genres, and languages across trending COTT content.</p>
         </header>
+
+        {% if available_weeks %}
+        <div class="selector-box glass-panel" style="padding: 16px 24px; border-radius: 12px; margin-bottom: 24px; background: rgba(255, 255, 255, 0.03); max-width: fit-content;">
+            <label for="weekSelect">Select Analysis Week:</label>
+            <select id="weekSelect" class="custom-select" onchange="window.location.href='/analytics?week=' + this.value">
+                {% for w in available_weeks %}
+                <option value="{{ w }}" {% if w == selected_week %}selected{% endif %}>{{ w }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
 
         <div class="analytics-grid">
             <!-- 1. Top 10 Content: Reach vs Rating -->
             <section class="chart-card glass-panel full-width">
-                <h3>Top 10 Content: Reach & IMDb Rating</h3>
+                <h3>Top 10 Content: Reach & Rating</h3>
                 <div class="chart-container-inner">
                     <canvas id="topContentChart"></canvas>
+                </div>
+                <div class="chart-footer-source">
+                    Source: COTT | Time Period: {{ metadata.time_period }} | Location: {{ metadata.market }}
                 </div>
             </section>
 
@@ -44,6 +90,9 @@
                 <div class="chart-container-inner">
                     <canvas id="platformPieChart"></canvas>
                 </div>
+                <div class="chart-footer-source">
+                    Source: COTT | Time Period: {{ metadata.time_period }} | Location: {{ metadata.market }}
+                </div>
             </section>
 
             <!-- 2b. Format Reach/Views Distribution -->
@@ -51,6 +100,9 @@
                 <h3>Views (Reach) by Content Format</h3>
                 <div class="chart-container-inner">
                     <canvas id="formatPieChart"></canvas>
+                </div>
+                <div class="chart-footer-source">
+                    Source: COTT | Time Period: {{ metadata.time_period }} | Location: {{ metadata.market }}
                 </div>
             </section>
 
@@ -60,6 +112,9 @@
                 <div class="chart-container-inner">
                     <canvas id="genreReachChart"></canvas>
                 </div>
+                <div class="chart-footer-source">
+                    Source: COTT | Time Period: {{ metadata.time_period }} | Location: {{ metadata.market }}
+                </div>
             </section>
 
             <!-- 4. Language Reach Percentages -->
@@ -67,6 +122,9 @@
                 <h3>Language Reach Distribution (%)</h3>
                 <div class="chart-container-inner">
                     <canvas id="languageReachChart"></canvas>
+                </div>
+                <div class="chart-footer-source">
+                    Source: COTT | Time Period: {{ metadata.time_period }} | Location: {{ metadata.market }}
                 </div>
             </section>
         </div>
@@ -80,6 +138,141 @@
         const formatsByReach = {{ formats_by_reach | tojson }};
         const genrePercentages = {{ genre_percentages | tojson }};
         const langPercentages = {{ lang_percentages | tojson }};
+
+        // Custom Plugin to draw connector lines and labels outside for small slices, and inside for large slices
+        const customDoughnutLabelsPlugin = {
+            id: 'customDoughnutLabels',
+            afterDraw(chart) {
+                const { ctx } = chart;
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    if (meta.hidden) return;
+                    
+                    const total = dataset.data.reduce((a, b) => a + b, 0);
+                    const rightLabelYPositions = [];
+                    const leftLabelYPositions = [];
+                    const centerPoint = meta.data[0] ? { x: meta.data[0].x, y: meta.data[0].y } : { x: 0, y: 0 };
+                    
+                    meta.data.forEach((element, index) => {
+                        const value = dataset.data[index];
+                        const pctValue = (value * 100 / total);
+                        const percentage = pctValue.toFixed(1) + "%";
+                        const label = chart.data.labels[index];
+                        
+                        const { x, y, startAngle, endAngle, outerRadius } = element;
+                        const midAngle = startAngle + (endAngle - startAngle) / 2;
+                        
+                        ctx.save();
+                        
+                        if (pctValue >= 15) {
+                            // Draw inside the slice
+                            const innerRadius = element.innerRadius || 0;
+                            const r = innerRadius + (outerRadius - innerRadius) / 2;
+                            const textX = x + Math.cos(midAngle) * r;
+                            const textY = y + Math.sin(midAngle) * r;
+                            
+                            ctx.font = 'bold 10px Inter, sans-serif';
+                            ctx.fillStyle = '#ffffff';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            
+                            // Draw name and percentage on two lines
+                            ctx.fillText(label, textX, textY - 6);
+                            ctx.fillText(percentage, textX, textY + 6);
+                        } else {
+                            // Draw outside with a connector line
+                            const isRight = Math.cos(midAngle) > 0;
+                            const startX = x + Math.cos(midAngle) * outerRadius;
+                            const startY = y + Math.sin(midAngle) * outerRadius;
+                            
+                            const lineLength = 15;
+                            let endX = x + Math.cos(midAngle) * (outerRadius + lineLength);
+                            let endY = y + Math.sin(midAngle) * (outerRadius + lineLength);
+                            
+                            // Overlap prevention logic (height of 2 lines is ~20px)
+                            const minGap = 20;
+                            const yList = isRight ? rightLabelYPositions : leftLabelYPositions;
+                            
+                            let adjusted = true;
+                            let attempts = 0;
+                            while (adjusted && attempts < 15) {
+                                adjusted = false;
+                                for (let pos of yList) {
+                                    if (Math.abs(endY - pos) < minGap) {
+                                        if (endY < centerPoint.y) {
+                                            endY -= 5;
+                                        } else {
+                                            endY += 5;
+                                        }
+                                        adjusted = true;
+                                        break;
+                                    }
+                                }
+                                attempts++;
+                            }
+                            yList.push(endY);
+                            
+                            // Clamp endY to prevent top/bottom clipping
+                            if (endY < 20) endY = 20;
+                            if (endY > chart.height - 20) endY = chart.height - 20;
+                            
+                            const shoulderLength = 8;
+                            const labelX = endX + (isRight ? shoulderLength : -shoulderLength);
+                            
+                            // Draw connector line
+                            ctx.beginPath();
+                            ctx.moveTo(startX, startY);
+                            ctx.lineTo(endX, endY);
+                            ctx.lineTo(labelX, endY);
+                            ctx.strokeStyle = dataset.backgroundColor[index] || '#ffffff';
+                            ctx.lineWidth = 1.5;
+                            ctx.stroke();
+                            
+                            // Draw text on two lines to keep it narrow and prevent clipping
+                            ctx.font = '600 10px Inter, sans-serif';
+                            ctx.fillStyle = '#e5e7eb';
+                            ctx.textAlign = isRight ? 'left' : 'right';
+                            ctx.textBaseline = 'middle';
+                            
+                            const textX = labelX + (isRight ? 4 : -4);
+                            ctx.fillText(label, textX, endY - 6);
+                            ctx.fillText(percentage, textX, endY + 6);
+                        }
+                        
+                        ctx.restore();
+                    });
+                });
+            }
+        };
+
+        // Custom Plugin to draw percentage values next to horizontal bars
+        const horizontalBarLabelsPlugin = {
+            id: 'horizontalBarLabels',
+            afterDraw(chart) {
+                const { ctx } = chart;
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    if (meta.hidden) return;
+                    
+                    meta.data.forEach((element, index) => {
+                        const value = dataset.data[index];
+                        const percentage = value.toFixed(1) + "%";
+                        
+                        const { x, y } = element;
+                        
+                        ctx.save();
+                        ctx.font = '600 10px Inter, sans-serif';
+                        ctx.fillStyle = '#e5e7eb';
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'middle';
+                        
+                        // Draw percentage text 6px to the right of the bar end
+                        ctx.fillText(percentage, x + 6, y);
+                        ctx.restore();
+                    });
+                });
+            }
+        };
 
         // Theme colors from CSS
         const colors = {
@@ -128,7 +321,7 @@
                         barPercentage: 0.55
                     },
                     {
-                        label: 'IMDb Rating',
+                        label: 'Rating',
                         data: topRatings,
                         type: 'line',
                         borderColor: colors.gold,
@@ -185,7 +378,7 @@
                         max: 10,
                         title: {
                             display: true,
-                            text: 'IMDb Rating',
+                            text: 'Rating',
                             color: colors.gold,
                             font: { weight: '600' }
                         },
@@ -214,8 +407,16 @@
             '#f472b6'
         ];
 
+        const chartPadding = {
+            left: window.innerWidth < 600 ? 60 : 135,
+            right: window.innerWidth < 600 ? 60 : 135,
+            top: window.innerWidth < 600 ? 30 : 50,
+            bottom: window.innerWidth < 600 ? 20 : 30
+        };
+
         new Chart(document.getElementById('platformPieChart').getContext('2d'), {
             type: 'doughnut',
+            plugins: [customDoughnutLabelsPlugin],
             data: {
                 labels: platformLabels,
                 datasets: [{
@@ -230,13 +431,25 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 cutout: '60%',
+                layout: {
+                    padding: chartPadding
+                },
                 plugins: {
                     legend: {
-                        position: 'right',
-                        labels: {
-                            font: { size: 11, weight: '500' },
-                            boxWidth: 15,
-                            padding: 12
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let sum = 0;
+                                let dataArr = context.chart.data.datasets[0].data;
+                                dataArr.forEach(data => {
+                                    sum += data;
+                                });
+                                let value = context.raw;
+                                let percentage = (value * 100 / sum).toFixed(1) + "%";
+                                return ` Shows: ${value} (${percentage})`;
+                            }
                         }
                     }
                 }
@@ -261,6 +474,7 @@
 
         new Chart(document.getElementById('formatPieChart').getContext('2d'), {
             type: 'doughnut',
+            plugins: [customDoughnutLabelsPlugin],
             data: {
                 labels: formatLabels,
                 datasets: [{
@@ -275,19 +489,24 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 cutout: '60%',
+                layout: {
+                    padding: chartPadding
+                },
                 plugins: {
                     legend: {
-                        position: 'right',
-                        labels: {
-                            font: { size: 11, weight: '500' },
-                            boxWidth: 15,
-                            padding: 12
-                        }
+                        display: false
                     },
                     tooltip: {
                         callbacks: {
                             label: function(context) {
-                                return ` Reach: ${context.raw}M views`;
+                                let sum = 0;
+                                let dataArr = context.chart.data.datasets[0].data;
+                                dataArr.forEach(data => {
+                                    sum += data;
+                                });
+                                let value = context.raw;
+                                let percentage = (value * 100 / sum).toFixed(1) + "%";
+                                return ` Reach: ${value}M views (${percentage})`;
                             }
                         }
                     }
@@ -305,6 +524,7 @@
 
         new Chart(document.getElementById('genreReachChart').getContext('2d'), {
             type: 'bar',
+            plugins: [horizontalBarLabelsPlugin],
             data: {
                 labels: genreLabels,
                 datasets: [{
@@ -321,6 +541,11 @@
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
+                layout: {
+                    padding: {
+                        right: 35
+                    }
+                },
                 plugins: {
                     legend: { display: false },
                     tooltip: {
@@ -355,6 +580,7 @@
 
         new Chart(document.getElementById('languageReachChart').getContext('2d'), {
             type: 'bar',
+            plugins: [horizontalBarLabelsPlugin],
             data: {
                 labels: langLabels,
                 datasets: [{
@@ -371,6 +597,11 @@
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
+                layout: {
+                    padding: {
+                        right: 35
+                    }
+                },
                 plugins: {
                     legend: { display: false },
                     tooltip: {

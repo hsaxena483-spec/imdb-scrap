@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COTT Analytics Dashboard</title>
     <meta name="description" content="Content analytics dashboard showing trending shows, movies, and live events with platform, genre, language, and reach filters.">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3">
 </head>
 <body>
     <nav class="glass-panel">
@@ -13,9 +13,31 @@
             <a href="/" class="brand">
                 <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
+            <!-- Global Search -->
+            <form method="GET" action="/" class="nav-search-form" id="navSearchForm">
+                {% for p in active_filters.platform %}<input type="hidden" name="platform" value="{{ p }}">{% endfor %}
+                {% for g in active_filters.genre %}<input type="hidden" name="genre" value="{{ g }}">{% endfor %}
+                {% for l in active_filters.language %}<input type="hidden" name="language" value="{{ l }}">{% endfor %}
+                {% for c in active_filters.content_type %}<input type="hidden" name="content_type" value="{{ c }}">{% endfor %}
+                {% for f in active_filters.content_format %}<input type="hidden" name="content_format" value="{{ f }}">{% endfor %}
+                {% for pf in active_filters.paid_free %}<input type="hidden" name="paid_free" value="{{ pf }}">{% endfor %}
+                {% if active_filters.gender %}<input type="hidden" name="gender" value="{{ active_filters.gender }}">{% endif %}
+                {% if active_filters.sports_mode %}<input type="hidden" name="sports_mode" value="{{ active_filters.sports_mode }}">{% endif %}
+                <div class="nav-search-wrapper">
+                    <span class="nav-search-icon">🔍</span>
+                    <input type="text" name="q" id="navSearchInput" class="nav-search-input"
+                           placeholder="Search shows…" value="{{ search_q }}" autocomplete="off">
+                    <a href="/" class="nav-search-clear" id="navSearchClear" style="{% if not search_q %}display:none;{% endif %}">✕</a>
+                    
+                    <div class="autocomplete-dropdown glass-panel" id="autocompleteDropdown" style="display:none;">
+                        <!-- Results injected here via JS -->
+                    </div>
+                </div>
+            </form>
             <div class="nav-links">
-                <!-- <a href="/">Dashboard</a> -->
-                <a href="/analytics" style="color: var(--text-primary); background: rgba(255, 255, 255, 0.08);">Analytics</a>
+                <a href="/" style="color: var(--text-primary); background: rgba(255, 255, 255, 0.08);">Home</a>
+                <a href="/analytics">Analytics</a>
+                <a href="/trending">Trending</a>
                 <a href="/update" class="nav-btn">Sync COTT Data</a>
             </div>
         </div>
@@ -335,7 +357,7 @@
             {% endif %}
 
             <!-- Content Grid -->
-            <h2 class="section-title">Trending Content</h2>
+            <h2 class="section-title" style="margin-top:8px;">Trending Content</h2>
             {% if shows %}
                 <section class="shows-grid">
                     {% for show in shows %}
@@ -397,14 +419,16 @@
                 {% if pagination.total_pages > 1 %}
                     <nav class="pagination-container glass-panel">
                         {% if pagination.has_prev %}
-                            <a href="{{ modify_query(pagination.prev_num) }}" class="pagination-btn">← Prev</a>
+                            <a href="{{ modify_query(pagination.prev_num) }}" class="pagination-btn pag-arrow">← Prev</a>
                         {% else %}
-                            <span class="pagination-btn disabled">← Prev</span>
+                            <span class="pagination-btn pag-arrow disabled">← Prev</span>
                         {% endif %}
 
                         <div class="pagination-pages">
-                            {% for p in range(1, pagination.total_pages + 1) %}
-                                {% if p == pagination.page %}
+                            {% for p in pagination.page_list %}
+                                {% if p is none %}
+                                    <span class="pagination-ellipsis">…</span>
+                                {% elif p == pagination.page %}
                                     <span class="pagination-btn active-page">{{ p }}</span>
                                 {% else %}
                                     <a href="{{ modify_query(p) }}" class="pagination-btn">{{ p }}</a>
@@ -412,10 +436,12 @@
                             {% endfor %}
                         </div>
 
+                        <span class="pagination-info">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+
                         {% if pagination.has_next %}
-                            <a href="{{ modify_query(pagination.next_num) }}" class="pagination-btn">Next →</a>
+                            <a href="{{ modify_query(pagination.next_num) }}" class="pagination-btn pag-arrow">Next →</a>
                         {% else %}
-                            <span class="pagination-btn disabled">Next →</span>
+                            <span class="pagination-btn pag-arrow disabled">Next →</span>
                         {% endif %}
                     </nav>
                 {% endif %}
@@ -463,5 +489,92 @@
         setTimeout(checkSyncStatus, 2000);
     </script>
     {% endif %}
+
+    <script>
+        // Autocomplete Logic
+        const searchInput = document.getElementById('navSearchInput');
+        const searchDropdown = document.getElementById('autocompleteDropdown');
+        const searchClear = document.getElementById('navSearchClear');
+        let searchTimeout = null;
+
+        if (searchInput && searchDropdown) {
+            const fetchAndShowResults = (q) => {
+                fetch(`/api/search?q=${encodeURIComponent(q)}`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.results && data.results.length > 0) {
+                            searchDropdown.innerHTML = '';
+                            data.results.forEach(show => {
+                                const a = document.createElement('a');
+                                a.className = 'autocomplete-item';
+                                a.href = `/show/${show.id}`;
+                                
+                                const imgHtml = show.poster_url 
+                                    ? `<img src="${show.poster_url}" alt="" loading="lazy">`
+                                    : `<div class="no-poster-mini">🎬</div>`;
+                                    
+                                const metaHtml = `
+                                    <div class="autocomplete-item-meta">
+                                        <span class="autocomplete-title">${show.title}</span>
+                                        <div class="autocomplete-sub">
+                                            ${show.release_year ? `<span>${show.release_year}</span>` : ''}
+                                            ${show.platform ? `<span class="platform-pill-mini">${show.platform}</span>` : ''}
+                                            ${show.global_rating ? `<span class="rating-mini">★ ${show.global_rating}</span>` : ''}
+                                        </div>
+                                    </div>
+                                `;
+                                a.innerHTML = imgHtml + metaHtml;
+                                searchDropdown.appendChild(a);
+                            });
+                            searchDropdown.style.display = 'block';
+                        } else {
+                            searchDropdown.innerHTML = '<div class="autocomplete-empty">No shows found for "' + q + '"</div>';
+                            searchDropdown.style.display = 'block';
+                        }
+                    })
+                    .catch(err => console.error(err));
+            };
+
+            searchInput.addEventListener('input', function() {
+                const q = this.value.trim();
+                
+                if (q.length > 0) {
+                    if (searchClear) searchClear.style.display = 'flex';
+                } else {
+                    if (searchClear) searchClear.style.display = 'none';
+                }
+                
+                if (searchTimeout) clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    fetchAndShowResults(q);
+                }, 300);
+            });
+
+            if (searchClear) {
+                searchClear.addEventListener('click', () => {
+                    searchInput.value = '';
+                    searchClear.style.display = 'none';
+                    fetchAndShowResults('');
+                    searchInput.focus();
+                });
+            }
+
+            // Hide dropdown when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!searchInput.contains(e.target) && !searchDropdown.contains(e.target)) {
+                    searchDropdown.style.display = 'none';
+                }
+            });
+            
+            searchInput.addEventListener('focus', function() {
+                const q = this.value.trim();
+                if (q.length === 0 || searchDropdown.innerHTML === '') {
+                    fetchAndShowResults(q);
+                } else {
+                    searchDropdown.style.display = 'block';
+                }
+            });
+        }
+    </script>
 </body>
 </html>

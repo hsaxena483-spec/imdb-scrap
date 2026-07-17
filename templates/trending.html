@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>COTT Analytics - Historical Trends</title>
+    <meta name="description" content="Track historical week-over-week trends of reach, ranks, platforms, formats, genres, and languages.">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .tabs-header {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .tab-btn {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .tab-btn:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+            color: var(--text-primary);
+        }
+        .tab-btn.active {
+            background: linear-gradient(135deg, #6366f1, #3b82f6);
+            border-color: transparent;
+            color: #ffffff;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.4s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .selector-box {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        .selector-box label {
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        .custom-select {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            min-width: 250px;
+            outline: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .custom-select:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }
+        .trend-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        @media (max-width: 1024px) {
+            .trend-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        .no-data-msg {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+        .no-data-msg p {
+            margin-top: 8px;
+            font-size: 0.9rem;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+    <nav class="glass-panel">
+        <div class="nav-container">
+            <a href="/" class="brand">
+                <div class="brand-logo">COTT<span>Analytics</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="/">Home</a>
+                <a href="/analytics">Analytics</a>
+                <a href="/trending" style="color: var(--text-primary); background: rgba(255, 255, 255, 0.08);">Trending</a>
+                <a href="/update" class="nav-btn">Sync COTT Data</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="analytics-container">
+        <header class="analytics-title-area">
+            <h1>Historical Trends Analysis</h1>
+            <p>Track show performance, platforms, format distributions, and genre shifts week-over-week.</p>
+        </header>
+
+        {% if not weeks %}
+        <div class="chart-card glass-panel no-data-msg">
+            <h3>No Multi-Week Data Available</h3>
+            <p>Please place your Excel files inside the <code>data_input/</code> folder and click "Sync COTT Data" to import them.</p>
+        </div>
+        {% else %}
+        
+        <div class="tabs-header">
+            <button class="tab-btn active" onclick="switchTab(event, 'show-trends')">Show Trends</button>
+            <button class="tab-btn" onclick="switchTab(event, 'content-trends')">Platform & Format Trends</button>
+            <button class="tab-btn" onclick="switchTab(event, 'genre-trends')">Genre & Language Trends</button>
+        </div>
+
+        <!-- TAB 1: Show Trends -->
+        <div id="show-trends" class="tab-content active">
+            <div class="selector-box glass-panel" style="padding: 16px 24px; border-radius: 12px; margin-bottom: 24px; background: rgba(255, 255, 255, 0.03); position: relative; z-index: 100; justify-content: space-between;">
+                <div style="width: 100%; max-width: 500px;">
+                    <label for="trendSearchInput" style="font-size:13px; color:var(--text-secondary); margin-bottom:8px; display:block;">🔍 Search & Select Show:</label>
+                    <div class="nav-search-wrapper">
+                        <span class="nav-search-icon">🔍</span>
+                        <input type="text" id="trendSearchInput" class="nav-search-input" placeholder="Type to search a show…" autocomplete="off">
+                        <a href="javascript:void(0)" class="nav-search-clear" id="trendSearchClear" style="display:none;">✕</a>
+                        
+                        <div class="autocomplete-dropdown glass-panel" id="trendAutocompleteDropdown" style="display:none; text-align:left;">
+                            <!-- Results injected here via JS -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="width: 100%; max-width: 350px;">
+                    <label for="fallbackSelect" style="font-size:13px; color:var(--text-secondary); margin-bottom:8px; display:block;">Or select from full list:</label>
+                    <select id="fallbackSelect" class="custom-select" style="width: 100%;" onchange="if(this.value) { loadShowTrends(this.value); document.getElementById('trendSearchInput').value = this.options[this.selectedIndex].text; this.value=''; }">
+                        <option value="">-- Browse All Shows --</option>
+                        {% for s in shows %}
+                        <option value="{{ s.id }}">{{ s.title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            
+            <section class="chart-card glass-panel full-width">
+                <h3 id="showChartTitle">Show Rank & Reach Trend</h3>
+                <div class="chart-container-inner" style="height: 400px; position: relative;">
+                    <canvas id="showTrendChart"></canvas>
+                </div>
+                <div class="chart-footer-source">
+                    Source: COTT | Location: {{ metadata.market }} | Tracking: {{ weeks|length }} Weeks
+                </div>
+            </section>
+        </div>
+
+        <!-- TAB 2: Platform & Format Trends -->
+        <div id="content-trends" class="tab-content">
+            <div class="trend-grid">
+                <section class="chart-card glass-panel">
+                    <h3>Platform Reach Share Trend</h3>
+                    <div class="chart-container-inner" style="height: 380px;">
+                        <canvas id="platformTrendChart"></canvas>
+                    </div>
+                    <div class="chart-footer-source">
+                        Source: COTT | Location: {{ metadata.market }}
+                    </div>
+                </section>
+                <section class="chart-card glass-panel">
+                    <h3>Content Format Reach Trend</h3>
+                    <div class="chart-container-inner" style="height: 380px;">
+                        <canvas id="formatTrendChart"></canvas>
+                    </div>
+                    <div class="chart-footer-source">
+                        Source: COTT | Location: {{ metadata.market }}
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- TAB 3: Genre & Language Trends -->
+        <div id="genre-trends" class="tab-content">
+            <div class="trend-grid">
+                <section class="chart-card glass-panel">
+                    <h3>Genre Reach Share Trend (%)</h3>
+                    <div class="chart-container-inner" style="height: 380px;">
+                        <canvas id="genreTrendChart"></canvas>
+                    </div>
+                    <div class="chart-footer-source">
+                        Source: COTT | Location: {{ metadata.market }}
+                    </div>
+                </section>
+                <section class="chart-card glass-panel">
+                    <h3>Language Reach Share Trend (%)</h3>
+                    <div class="chart-container-inner" style="height: 380px;">
+                        <canvas id="languageTrendChart"></canvas>
+                    </div>
+                    <div class="chart-footer-source">
+                        Source: COTT | Location: {{ metadata.market }}
+                    </div>
+                </section>
+            </div>
+        </div>
+        
+        {% endif %}
+    </main>
+
+    {% if weeks %}
+    <script>
+        // Tab switching
+        function switchTab(evt, tabId) {
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(c => c.classList.remove('active'));
+            
+            const buttons = document.querySelectorAll('.tab-btn');
+            buttons.forEach(b => b.classList.remove('active'));
+            
+            document.getElementById(tabId).classList.add('active');
+            evt.currentTarget.classList.add('active');
+            
+            // Trigger chart updates/refreshes if needed
+            if (tabId === 'content-trends' && !platformTrendChartInstance) {
+                loadContentTrends();
+            } else if (tabId === 'genre-trends' && !genreTrendChartInstance) {
+                loadGenreTrends();
+            }
+        }
+
+        // Custom plugin to draw values directly on data points without hovering
+        const lineChartLabelsPlugin = {
+            id: 'lineChartLabelsPlugin',
+            afterDraw: (chart) => {
+                const ctx = chart.ctx;
+                ctx.save();
+                
+                chart.data.datasets.forEach((dataset, datasetIndex) => {
+                    const meta = chart.getDatasetMeta(datasetIndex);
+                    if (meta.hidden) return;
+                    
+                    const isReach = dataset.label.includes('Reach');
+                    
+                    meta.data.forEach((element, index) => {
+                        const value = dataset.data[index];
+                        if (value === null || value === undefined) return;
+                        
+                        let text = '';
+                        if (isReach) {
+                            text = parseFloat(value).toFixed(1) + 'M';
+                        } else {
+                            text = '#' + parseInt(value);
+                        }
+                        
+                        ctx.font = '600 10px Inter, sans-serif';
+                        ctx.textAlign = 'center';
+                        
+                        const yOffset = isReach ? -12 : 18;
+                        const x = element.x;
+                        const y = element.y + yOffset;
+                        
+                        // Draw dark background bubble
+                        const textWidth = ctx.measureText(text).width;
+                        ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+                        ctx.fillRect(x - textWidth/2 - 4, y - 9, textWidth + 8, 13);
+                        
+                        // Draw label text
+                        ctx.fillStyle = isReach ? '#a5b4fc' : '#fde047';
+                        ctx.fillText(text, x, y + 1);
+                    });
+                });
+                ctx.restore();
+            }
+        };
+
+        // Global Chart instances
+        let showTrendChartInstance = null;
+        let platformTrendChartInstance = null;
+        let formatTrendChartInstance = null;
+        let genreTrendChartInstance = null;
+        let languageTrendChartInstance = null;
+
+        // Colors palette
+        const colors = [
+            '#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', 
+            '#8b5cf6', '#ec4899', '#06b6d4', '#14b8a6', '#f43f5e'
+        ];
+
+        // 1. Single Show Trends Loader
+        function loadShowTrends(showId) {
+            if (!showId) return;
+            
+            fetch(`/api/show_trends?show_id=${showId}`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.error) {
+                        console.error(data.error);
+                        return;
+                    }
+                    
+                    document.getElementById('showChartTitle').innerText = `${data.title} - Rank & Reach Trend`;
+                    renderShowChart(data.weeks, data.ranks, data.reach);
+                });
+        }
+
+        function renderShowChart(weeks, ranks, reach) {
+            const ctx = document.getElementById('showTrendChart').getContext('2d');
+            
+            if (showTrendChartInstance) {
+                showTrendChartInstance.destroy();
+            }
+
+            // Create gradients
+            const reachGradient = ctx.createLinearGradient(0, 0, 0, 400);
+            reachGradient.addColorStop(0, 'rgba(99, 102, 241, 0.3)');
+            reachGradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
+
+            showTrendChartInstance = new Chart(ctx, {
+                type: 'line',
+                plugins: [lineChartLabelsPlugin],
+                data: {
+                    labels: weeks,
+                    datasets: [
+                        {
+                            label: 'Reach (Millions)',
+                            data: reach,
+                            borderColor: '#6366f1',
+                            backgroundColor: reachGradient,
+                            borderWidth: 4,
+                            fill: true,
+                            tension: 0.4,
+                            yAxisID: 'yReach',
+                            pointBackgroundColor: '#6366f1',
+                            pointBorderColor: '#0f172a',
+                            pointBorderWidth: 2.5,
+                            pointHoverRadius: 9,
+                            pointRadius: 6.5
+                        },
+                        {
+                            label: 'Rank',
+                            data: ranks,
+                            borderColor: '#eab308',
+                            backgroundColor: 'transparent',
+                            borderWidth: 4,
+                            fill: false,
+                            tension: 0.4,
+                            yAxisID: 'yRank',
+                            pointBackgroundColor: '#eab308',
+                            pointBorderColor: '#0f172a',
+                            pointBorderWidth: 2.5,
+                            pointHoverRadius: 9,
+                            pointRadius: 6.5
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#e5e7eb',
+                                font: { family: 'Inter, system-ui', size: 12, weight: '500' }
+                            }
+                        },
+                        tooltip: {
+                            backgroundColor: '#0f172a',
+                            titleColor: '#ffffff',
+                            bodyColor: '#e5e7eb',
+                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            borderWidth: 1,
+                            padding: 12
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#9ca3af', font: { family: 'Inter' } }
+                        },
+                        yReach: {
+                            type: 'linear',
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Reach (Millions)',
+                                color: '#6366f1',
+                                font: { size: 12, weight: '600' }
+                            },
+                            grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                            ticks: { color: '#9ca3af' }
+                        },
+                        yRank: {
+                            type: 'linear',
+                            position: 'right',
+                            reverse: true, // Invert rank scale so rank 1 is at top
+                            title: {
+                                display: true,
+                                text: 'Popularity Rank',
+                                color: '#f59e0b',
+                                font: { size: 12, weight: '600' }
+                            },
+                            grid: { drawOnChartArea: false }, // only draw grid lines for reach
+                            ticks: { 
+                                color: '#9ca3af',
+                                stepSize: 10,
+                                precision: 0
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 2. Platform & Format Trends Loader
+        function loadContentTrends() {
+            fetch('/api/content_trends')
+                .then(r => r.json())
+                .then(data => {
+                    renderPlatformChart(data.platforms.weeks, data.platforms.labels, data.platforms.trends);
+                    renderFormatChart(data.formats.weeks, data.formats.labels, data.formats.trends);
+                });
+        }
+
+        function renderPlatformChart(weeks, labels, trends) {
+            const ctx = document.getElementById('platformTrendChart').getContext('2d');
+            const datasets = labels.map((label, idx) => ({
+                label: label,
+                data: trends[label],
+                borderColor: colors[idx % colors.length],
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                fill: false,
+                tension: 0.3,
+                pointRadius: 4
+            }));
+
+            platformTrendChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { labels: weeks, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#e5e7eb', boxWidth: 12, font: { family: 'Inter' } }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' }, title: { display: true, text: 'Reach (Millions)', color: '#9ca3af' } }
+                    }
+                }
+            });
+        }
+
+        function renderFormatChart(weeks, labels, trends) {
+            const ctx = document.getElementById('formatTrendChart').getContext('2d');
+            const datasets = labels.map((label, idx) => ({
+                label: label,
+                data: trends[label],
+                borderColor: colors[(idx + 4) % colors.length],
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                fill: false,
+                tension: 0.3,
+                pointRadius: 4
+            }));
+
+            formatTrendChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { labels: weeks, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#e5e7eb', boxWidth: 12, font: { family: 'Inter' } }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' }, title: { display: true, text: 'Reach (Millions)', color: '#9ca3af' } }
+                    }
+                }
+            });
+        }
+
+        // 3. Genre & Language Trends Loader
+        function loadGenreTrends() {
+            fetch('/api/genre_trends')
+                .then(r => r.json())
+                .then(data => {
+                    renderGenreChart(data.genres.weeks, data.genres.labels, data.genres.trends);
+                    renderLanguageChart(data.languages.weeks, data.languages.labels, data.languages.trends);
+                });
+        }
+
+        function renderGenreChart(weeks, labels, trends) {
+            const ctx = document.getElementById('genreTrendChart').getContext('2d');
+            
+            // Only plot top 6 genres to avoid cluttering
+            const sortedLabels = labels.map(label => {
+                const arr = trends[label];
+                const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+                return { label, avg };
+            }).sort((a, b) => b.avg - a.avg).map(item => item.label).slice(0, 6);
+
+            const datasets = sortedLabels.map((label, idx) => ({
+                label: label,
+                data: trends[label],
+                borderColor: colors[idx % colors.length],
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                fill: false,
+                tension: 0.3,
+                pointRadius: 4
+            }));
+
+            genreTrendChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { labels: weeks, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#e5e7eb', boxWidth: 12, font: { family: 'Inter' } }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' }, title: { display: true, text: 'Reach Share (%)', color: '#9ca3af' }, min: 0 }
+                    }
+                }
+            });
+        }
+
+        function renderLanguageChart(weeks, labels, trends) {
+            const ctx = document.getElementById('languageTrendChart').getContext('2d');
+            const datasets = labels.map((label, idx) => ({
+                label: label,
+                data: trends[label],
+                borderColor: colors[(idx + 2) % colors.length],
+                backgroundColor: 'transparent',
+                borderWidth: 2.5,
+                fill: false,
+                tension: 0.3,
+                pointRadius: 4
+            }));
+
+            languageTrendChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { labels: weeks, datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: { color: '#e5e7eb', boxWidth: 12, font: { family: 'Inter' } }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+                        y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' }, title: { display: true, text: 'Reach Share (%)', color: '#9ca3af' }, min: 0 }
+                    }
+                }
+            });
+        }
+
+        // Custom Autocomplete and default load
+        window.addEventListener('DOMContentLoaded', () => {
+            const searchInput = document.getElementById('trendSearchInput');
+            const searchDropdown = document.getElementById('trendAutocompleteDropdown');
+            const searchClear = document.getElementById('trendSearchClear');
+            let searchTimeout = null;
+
+            if (searchInput && searchDropdown) {
+                const fetchAndShowResults = (q) => {
+                    fetch(`/api/search?q=${encodeURIComponent(q)}`)
+                        .then(res => res.json())
+                        .then(data => {
+                            if (data.results && data.results.length > 0) {
+                                searchDropdown.innerHTML = '';
+                                data.results.forEach(show => {
+                                    const a = document.createElement('a');
+                                    a.className = 'autocomplete-item';
+                                    a.href = 'javascript:void(0)';
+                                    a.onclick = (e) => {
+                                        e.preventDefault();
+                                        loadShowTrends(show.id);
+                                        searchInput.value = show.title;
+                                        searchDropdown.style.display = 'none';
+                                        if (searchClear) searchClear.style.display = 'flex';
+                                    };
+                                    
+                                    const imgHtml = show.poster_url 
+                                        ? `<img src="${show.poster_url}" alt="" loading="lazy">`
+                                        : `<div class="no-poster-mini">🎬</div>`;
+                                        
+                                    const metaHtml = `
+                                        <div class="autocomplete-item-meta">
+                                            <span class="autocomplete-title">${show.title}</span>
+                                            <div class="autocomplete-sub">
+                                                ${show.release_year ? `<span>${show.release_year}</span>` : ''}
+                                                ${show.platform ? `<span class="platform-pill-mini">${show.platform}</span>` : ''}
+                                                ${show.global_rating ? `<span class="rating-mini">★ ${show.global_rating}</span>` : ''}
+                                            </div>
+                                        </div>
+                                    `;
+                                    a.innerHTML = imgHtml + metaHtml;
+                                    searchDropdown.appendChild(a);
+                                });
+                                searchDropdown.style.display = 'block';
+                            } else {
+                                searchDropdown.innerHTML = '<div class="autocomplete-empty">No shows found for "' + q + '"</div>';
+                                searchDropdown.style.display = 'block';
+                            }
+                        })
+                        .catch(err => console.error(err));
+                };
+
+                searchInput.addEventListener('input', function() {
+                    const q = this.value.trim();
+                    
+                    if (q.length > 0) {
+                        if (searchClear) searchClear.style.display = 'flex';
+                    } else {
+                        if (searchClear) searchClear.style.display = 'none';
+                    }
+                    
+                    if (searchTimeout) clearTimeout(searchTimeout);
+                    searchTimeout = setTimeout(() => {
+                        fetchAndShowResults(q);
+                    }, 300);
+                });
+
+                // Clear input
+                if (searchClear) {
+                    searchClear.addEventListener('click', () => {
+                        searchInput.value = '';
+                        searchClear.style.display = 'none';
+                        fetchAndShowResults('');
+                        searchInput.focus();
+                    });
+                }
+
+                // Hide dropdown when clicking outside
+                document.addEventListener('click', function(e) {
+                    if (!searchInput.contains(e.target) && !searchDropdown.contains(e.target)) {
+                        searchDropdown.style.display = 'none';
+                    }
+                });
+                
+                searchInput.addEventListener('focus', function() {
+                    const q = this.value.trim();
+                    if (q.length === 0 || searchDropdown.innerHTML === '') {
+                        fetchAndShowResults(q);
+                    } else {
+                        searchDropdown.style.display = 'block';
+                    }
+                });
+            }
+
+            // Load first show on open
+            {% if shows and shows|length > 0 %}
+            loadShowTrends("{{ shows[0].id }}");
+            if (searchInput) {
+                searchInput.value = "{{ shows[0].title }}";
+                if (searchClear) searchClear.style.display = 'flex';
+            }
+            {% endif %}
+        });
+    </script>
+    {% endif %}
+</body>
+</html>

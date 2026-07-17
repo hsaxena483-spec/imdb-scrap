@@ -1,67 +1,83 @@
-# IMDb TV Show Scraper & Web Dashboard Walkthrough
+# COTT Multi-Week Trend Analysis Walkthrough
 
-We have successfully optimized the Python-based IMDb scraper and implemented a premium glassmorphic dark-mode web dashboard to visualize all your TV show rankings, details, country breakdowns, and user reviews.
+We have successfully migrated the database schema to support multi-week historical tracking, updated the scraper to act as a chronologically sorted hybrid Excel importer, and implemented interactive line charts on a new dedicated **Trending** page and individual show detail pages.
 
-All files are present in your workspace at `c:\Users\saxen\OneDrive\Desktop\projects\Imdbscrap`.
-
----
-
-## File Structure & Project Architecture
-
-- **`scraper.py`**: Optimized scraper using Selenium. Implements eager loading, blocks image fetches, deletes cookies before reviews loading to bypass WAF limits, reuses a single DB connection session, and creates/deletes `scraper.lock` to signal scraping activity status.
-- **`db.py`**: Database controller. Manages schemas, upserts, clears ranks, and includes `is_show_fresh(conn, is_sqlite, show_id)` check to enable scraper resumability.
-- **`app.py`**: Flask web server handling routing, loading genres/reviews/country stats, cleaning stale locks, exposing a `/sync_status` endpoint, handling paginated requests, and rendering HTML templates.
-- **`static/style.css`**: Premium glassmorphic dark-mode CSS styling custom-designed with modern `Outfit` & `Inter` Google Fonts (now includes custom styles for pagination controls).
-- **`templates/index.html`**: Home page displaying stats, a rank card list of scraped shows, pagination controls, and the JavaScript auto-polling reload mechanism.
-- **`templates/show.html`**: Detail page displaying rating breakdowns by country and user reviews.
+All files are active in your workspace at `c:\Users\saxen\OneDrive\Desktop\projects\Imdbscrap`.
 
 ---
 
-## Scraper Enhancements & Results
+## 🚀 Key Features Implemented
 
-### 1. Verification of Scraping Optimizations
-We ran `scraper.py` configured to fetch **30 shows** (`SCRAPE_LIMIT=30`):
-* **Resumability**: The first 10 shows were recognized as already fresh (scraped within last 24h) and successfully skipped in milliseconds.
-* **Performance**: The remaining 20 shows loaded 3x faster due to image blocking and eager loading.
-* **DB Connection Reuse**: The entire session was run using a single connection transaction loop to Neon PostgreSQL, eliminating database connection latency.
-* **Outcome**: 30 shows, 79 genres, 150 country-specific rating rows, and all parsed reviews were successfully written directly to your Neon cloud PostgreSQL database.
+### 1. Chronological Hybrid Importer (`scraper.py`)
+- **Directory Scan**: Scans a directory (defaults to `data_input/`) for all `.xlsx` files.
+- **Chronological Sorting**: Parses the week code (e.g. `WK-19,2026` ... `WK-26,2026`) from each sheet dynamically, extracts the week number and year, and sorts the files chronologically.
+- **Duplication Checks**: Looks up each show title in the database before scraping. If it exists, it skips all Selenium/IMDb requests, immediately reusing the ID. If new, it queries IMDb to pull rich metadata.
+- **Title Hashing**: Generates consistent MD5-based IDs (`xl_<hash>`) for shows not found on IMDb so that they still link correctly week-over-week.
+- **Multi-Week Metadata**: Saves time periods and locations for all weeks to `metadata.json`.
 
----
+### 2. Multi-Week Database Schema (`db.py`)
+- Added the `show_weekly_rankings` table:
+  - Fields: `show_id`, `week`, `current_rank`, `reach`, `platform`, `content_format`, `paid_free`, `content_type`, `market`.
+  - Primary Key: `(show_id, week)` to store rankings for multiple weeks without overwriting.
 
-## Interactive Web Dashboard
+### 3. Dedicated Trending Page (`/trending`)
+- Displays three interactive tabs with line charts using **Chart.js**:
+  - **Show Trends**: Select a show from the searchable dropdown to view its Rank (inverted scale on right axis) and Reach (left axis) over time.
+  - **Platform & Format Trends**: Side-by-side line charts of weekly total reach shares by platforms and formats.
+  - **Genre & Language Trends**: Side-by-side line charts of reach percentage shifts of different genres and languages.
 
-The Flask web dashboard is active and running at:
-👉 **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
+### 4. Show Details Trend Line (`show.html`)
+- Displays an interactive line chart directly on each show's detail page showing its 8-week Rank and Reach history (fully populated dynamically).
 
-### Dashboard Features:
-1. **Interactive Cards**: Displays a card layout ordered by popularity rank. Cards feature rank badges, global rating stars, release dates, content certificate tags, and genres.
-2. **Detail Page**: Clicking on any card opens the detailed view showing synopsis, plot, creators, lead stars, country rating breakdowns, and full user review cards.
-3. **Glassmorphic Design**: Sleek layout with blur filters, dark colors, and micro-hover transitions that feel premium.
-4. **IMDb Live Syncing (With Auto-refresh)**:
-   - Clicking **Sync IMDb Data** in the navigation bar triggers the scraper in the background using an independent process.
-   - It writes a temporary `scraper.lock` file.
-   - While the scraper runs, the dashboard homepage displays a green status banner (`IMDb Sync started in background...`).
-   - A polling script checks the `/sync_status` endpoint every 2 seconds.
-   - As soon as the scraper finishes and removes the lock file, **the page automatically reloads itself** to display the fresh data without requiring any manual clicks!
-5. **No Outdated Ranks**: Ranks are set to `NULL` before a fresh scrape starts, and only the active trending list is queried, ensuring there are no duplicate ranks or extra shows displayed.
-6. **Smart Pagination**: Displays shows in pages of **12 items per page** (perfect for grid formatting). Beautiful glassmorphic buttons let you navigate easily between pages (`← Prev`, page numbers `1, 2, 3...`, `Next →`).
+### 5. Single Week Analytics Dropdown (`analytics.html`)
+- Added a **Select Analysis Week** dropdown at the top of the Analytics page.
+- Selecting a week automatically reloads the page to show platform, format, genre, and language snapshot distributions for that specific week.
 
 ---
 
-## How to Manage the Application
+## 🛠️ Verification & Test Results
 
-### 1. Running the Scraper
-To update rankings or fetch new popular shows:
-- **Directly from Dashboard**: Click the **Sync IMDb Data** button in the navigation bar.
-- **From Command Line**: Run:
-  ```bash
-  python scraper.py
-  ```
-*(Any show already scraped within 24 hours will be automatically skipped to save bandwidth, while its current ranking is updated).*
+1. **Database Schema Creation**:
+   - Running `db.py` successfully created the `show_weekly_rankings` table in your cloud database:
+     ```text
+     Creating table: show_weekly_rankings...
+     Database initialized successfully.
+     ```
 
-### 2. Running the Dashboard
-If you need to start the dashboard server again in the future:
+2. **Excel Import Run**:
+   - Placed a test Excel sheet `imdb_analysis_test.xlsx` (WK-26) in the `data_input/` directory and ran `python scraper.py`.
+   - The importer successfully scanned the file, skipped web scraping for all 50 shows (as they already existed), and wrote the rankings directly:
+     ```text
+     Sorted Excel files chronologically:
+       1. data_input\imdb_analysis_test.xlsx (Week: WK-26,2026)
+     Loaded 50 shows from data_input\imdb_analysis_test.xlsx.
+     [1/50] Show 'England vs India T20 Series 2026' exists in DB. Skipping IMDb scrape.
+     ...
+     Excel Import process finished successfully.
+     ```
+   - Verified that 50 rows were written to `show_weekly_rankings`.
+
+---
+
+## 📖 How to Run & Import Your Data
+
+### 1. Place Your 8 Excel Files
+Create the `data_input` folder inside the project and copy your 8 Excel files there:
+`c:\Users\saxen\OneDrive\Desktop\projects\Imdbscrap\data_input`
+
+### 2. Run the Importer
+Run the importer from your terminal:
+```bash
+python scraper.py
+```
+*The importer will sort the files, check for existing shows, and import all 8 weeks in seconds.*
+
+### 3. Run the Dashboard
+Start your web server:
 ```bash
 python app.py
 ```
-Then open [http://127.0.0.1:5000](http://127.0.0.1:5000) in your web browser.
+Navigate to **[http://127.0.0.1:5000](http://127.0.0.1:5000)** to browse the new pages!
+- Click **Trending** in the navigation header to see multi-week trends.
+- Click **Analytics** and change the dropdown to view snapshots of specific weeks.
+- Click on any show card to see its detail page along with its individual trend chart!

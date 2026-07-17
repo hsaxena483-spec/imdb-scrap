@@ -13,8 +13,9 @@
                 <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
             <div class="nav-links">
-                <!-- <a href="/">Dashboard</a> -->
+                <a href="/">Home</a>
                 <a href="/analytics">Analytics</a>
+                <a href="/trending">Trending</a>
                 <a href="/update" class="nav-btn">Sync COTT Data</a>
             </div>
         </div>
@@ -81,6 +82,37 @@
             </div>
         </section>
 
+        <!-- Trend Analysis Section -->
+        {% if weekly_history %}
+        <section class="trend-section" style="margin-top: 32px; margin-bottom: 32px;">
+            <h2 class="section-title">Historical Performance (8-Week Trend)</h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <!-- Reach Chart -->
+                <div class="glass-panel" style="padding: 20px; border-radius: 12px;">
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                        <div style="width:14px;height:14px;border-radius:50%;background:#6366f1;"></div>
+                        <span style="font-size:15px;font-weight:700;color:#e5e7eb;">Weekly Reach</span>
+                        <span style="font-size:12px;color:#6366f1;margin-left:auto;">Millions of Viewers</span>
+                    </div>
+                    <div style="height: 260px; position: relative;">
+                        <canvas id="reachChart"></canvas>
+                    </div>
+                </div>
+                <!-- Rank Chart -->
+                <div class="glass-panel" style="padding: 20px; border-radius: 12px;">
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                        <div style="width:14px;height:14px;border-radius:50%;background:#eab308;"></div>
+                        <span style="font-size:15px;font-weight:700;color:#e5e7eb;">Weekly Rank</span>
+                        <span style="font-size:12px;color:#eab308;margin-left:auto;">#1 = Best Rank</span>
+                    </div>
+                    <div style="height: 260px; position: relative;">
+                        <canvas id="rankChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+        {% endif %}
+
         <!-- Country-Specific Ratings Section -->
         <section class="countries-section">
             <h2 class="section-title">Ratings by Country</h2>
@@ -141,5 +173,165 @@
             {% endif %}
         </section>
     </main>
+
+    {% if weekly_history %}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const rawWeeks = {{ weekly_history | map(attribute='week') | list | tojson }};
+        const ranks    = {{ weekly_history | map(attribute='rank')  | list | tojson }};
+        const reach    = {{ weekly_history | map(attribute='reach') | list | tojson }};
+
+        // Format week labels: "WK-27,2026" → "Wk 27"
+        const weeks = rawWeeks.map(w => { const m = w.match(/WK-(\d+)/i); return m ? 'Wk ' + m[1] : w; });
+
+        // ── Shared chart defaults ────────────────────────────────────────────
+        const sharedScaleX = {
+            grid: { color: 'rgba(255,255,255,0.05)' },
+            ticks: { color: '#94a3b8', font: { family: 'Inter', size: 11, weight: '500' }, maxRotation: 0 }
+        };
+        const sharedScaleY = (extra={}) => ({
+            grid: { color: 'rgba(255,255,255,0.06)' },
+            ticks: { color: '#94a3b8', font: { family: 'Inter', size: 11 } },
+            ...extra
+        });
+
+        // ── Pill label plugin ────────────────────────────────────────────────
+        function makePillPlugin(color, formatter) {
+            return {
+                id: 'pillLabels_' + color,
+                afterDraw(chart) {
+                    const ctx = chart.ctx;
+                    ctx.save();
+                    chart.data.datasets.forEach((ds, di) => {
+                        const meta = chart.getDatasetMeta(di);
+                        if (meta.hidden) return;
+                        meta.data.forEach((pt, i) => {
+                            const val = ds.data[i];
+                            if (val === null || val === undefined) return;
+                            const label = formatter(val);
+                            ctx.font = 'bold 11px Inter, sans-serif';
+                            const tw = ctx.measureText(label).width;
+                            const pw = tw + 16, ph = 20, pr = 10;
+                            const px = pt.x - pw / 2, py = pt.y - ph - 10;
+                            // pill background
+                            ctx.beginPath();
+                            ctx.moveTo(px + pr, py);
+                            ctx.lineTo(px + pw - pr, py);
+                            ctx.quadraticCurveTo(px + pw, py, px + pw, py + pr);
+                            ctx.lineTo(px + pw, py + ph - pr);
+                            ctx.quadraticCurveTo(px + pw, py + ph, px + pw - pr, py + ph);
+                            ctx.lineTo(px + pr, py + ph);
+                            ctx.quadraticCurveTo(px, py + ph, px, py + ph - pr);
+                            ctx.lineTo(px, py + pr);
+                            ctx.quadraticCurveTo(px, py, px + pr, py);
+                            ctx.closePath();
+                            ctx.fillStyle = color;
+                            ctx.fill();
+                            // text
+                            ctx.fillStyle = '#fff';
+                            ctx.textAlign = 'center';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText(label, pt.x, py + ph / 2);
+                        });
+                    });
+                    ctx.restore();
+                }
+            };
+        }
+
+        // ── Reach Chart ──────────────────────────────────────────────────────
+        const reachGrad = document.getElementById('reachChart').getContext('2d').createLinearGradient(0,0,0,260);
+        reachGrad.addColorStop(0, 'rgba(99,102,241,0.3)');
+        reachGrad.addColorStop(1, 'rgba(99,102,241,0.0)');
+
+        new Chart(document.getElementById('reachChart'), {
+            type: 'line',
+            plugins: [makePillPlugin('rgba(99,102,241,0.95)', v => parseFloat(v).toFixed(1) + 'M')],
+            data: {
+                labels: weeks,
+                datasets: [{
+                    data: reach,
+                    borderColor: '#6366f1',
+                    backgroundColor: reachGrad,
+                    borderWidth: 3,
+                    fill: true,
+                    tension: 0.4,
+                    pointBackgroundColor: '#6366f1',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 7,
+                    pointHoverRadius: 10
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: { padding: { top: 38, bottom: 4 } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(15,23,42,0.95)',
+                        titleColor: '#fff',
+                        bodyColor: '#e5e7eb',
+                        borderColor: 'rgba(255,255,255,0.15)',
+                        borderWidth: 1,
+                        padding: 12,
+                        callbacks: { label: ctx => '  Reach: ' + parseFloat(ctx.raw).toFixed(1) + 'M viewers' }
+                    }
+                },
+                scales: {
+                    x: sharedScaleX,
+                    y: sharedScaleY({ ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + 'M' } })
+                }
+            }
+        });
+
+        // ── Rank Chart ───────────────────────────────────────────────────────
+        new Chart(document.getElementById('rankChart'), {
+            type: 'line',
+            plugins: [makePillPlugin('rgba(234,179,8,0.95)', v => '#' + parseInt(v))],
+            data: {
+                labels: weeks,
+                datasets: [{
+                    data: ranks,
+                    borderColor: '#eab308',
+                    backgroundColor: 'transparent',
+                    borderWidth: 3,
+                    fill: false,
+                    tension: 0.4,
+                    pointBackgroundColor: '#eab308',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 7,
+                    pointHoverRadius: 10
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: { padding: { top: 38, bottom: 4 } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(15,23,42,0.95)',
+                        titleColor: '#fff',
+                        bodyColor: '#e5e7eb',
+                        borderColor: 'rgba(255,255,255,0.15)',
+                        borderWidth: 1,
+                        padding: 12,
+                        callbacks: { label: ctx => '  Rank: #' + parseInt(ctx.raw) }
+                    }
+                },
+                scales: {
+                    x: sharedScaleX,
+                    y: sharedScaleY({ reverse: true, ticks: { color: '#94a3b8', font: { size: 11 }, stepSize: 1, precision: 0, callback: v => '#' + v } })
+                }
+            }
+        });
+    });
+    </script>
+    {% endif %}
 </body>
 </html>
