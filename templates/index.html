@@ -56,7 +56,10 @@
         <aside class="filter-sidebar" id="filterSidebar">
             <div class="filter-header">
                 <h3>🔍 Filters</h3>
-                <a href="/" class="filter-clear-btn" id="clearAllFilters">Clear All</a>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <a href="/" class="filter-clear-btn" id="clearAllFilters">Clear All</a>
+                    <button class="filter-sidebar-close" id="filterSidebarClose" onclick="closeSidebar()" title="Close filters">✕</button>
+                </div>
             </div>
             
             <form id="filterForm" method="GET" action="/">
@@ -455,8 +458,11 @@
         </div>
     </main>
 
+    <!-- Sidebar Backdrop -->
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
+    
     <!-- Mobile Filter Toggle -->
-    <button class="mobile-filter-toggle" onclick="document.getElementById('filterSidebar').classList.toggle('open')">
+    <button class="mobile-filter-toggle" id="mobileFilterToggle" onclick="openSidebar()">
         🔍 Filters
     </button>
 
@@ -467,6 +473,23 @@
             options.classList.toggle('collapsed');
             arrow.classList.toggle('rotated');
         }
+
+        function openSidebar() {
+            document.getElementById('filterSidebar').classList.add('open');
+            document.getElementById('sidebarBackdrop').classList.add('visible');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeSidebar() {
+            document.getElementById('filterSidebar').classList.remove('open');
+            document.getElementById('sidebarBackdrop').classList.remove('visible');
+            document.body.style.overflow = '';
+        }
+
+        // Close with Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeSidebar();
+        });
     </script>
 
     {% if request.args.get('syncing') == 'true' %}
