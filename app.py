@@ -2,13 +2,31 @@ import os
 import math
 import json
 import urllib.parse
-from flask import Flask, render_template, request, redirect, url_for, jsonify, g
+from flask import Flask, render_template, request, redirect, url_for, jsonify, g, make_response
 from dotenv import load_dotenv
 import db
 
-load_dotenv()
+# Load environment variables relative to app.py directory
+basedir = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(basedir, '.env'))
 
 app = Flask(__name__)
+
+@app.before_request
+def handle_options_preflight():
+    if request.method == "OPTIONS":
+        response = make_response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+        return response
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+    return response
 
 def normalize_genre(genre_name):
     if not genre_name:
@@ -415,6 +433,326 @@ def show_detail(show_id):
     return render_template("show.html", show=show, country_ratings=country_ratings, reviews=reviews, weekly_history=weekly_history)
 
 
+@app.route("/api/shows")
+def api_shows_json():
+    # Helper to parse list parameters which could be comma-separated or separate request arguments
+    def get_list_param(param_name):
+        vals = request.args.getlist(param_name)
+        if len(vals) == 1 and ',' in vals[0]:
+            return [v.strip() for v in vals[0].split(',') if v.strip()]
+        return vals
+
+    page = request.args.get('page', 1, type=int)
+    per_page = 12
+    offset = (page - 1) * per_page
+    search_q = request.args.get('q', '').strip()
+    
+    # Collect active filters from query params
+    filter_platform = get_list_param('platform')
+    filter_genre = get_list_param('genre')
+    filter_language = get_list_param('language')
+    filter_content_type = get_list_param('content_type')
+    filter_content_format = get_list_param('content_format')
+    filter_paid_free = get_list_param('paid_free')
+    filter_gender = request.args.get('gender', '')
+    reach_min = request.args.get('reach_min', '', type=str)
+    reach_max = request.args.get('reach_max', '', type=str)
+    sports_mode = request.args.get('sports_mode', '')
+    
+    # Build WHERE clauses dynamically
+    where_clauses = ["s.current_rank IS NOT NULL"]
+    
+    # Search by title
+    if search_q:
+        where_clauses.append("s.title ILIKE %s")
+        params_prefix = [f"%{search_q}%"]
+    else:
+        params_prefix = []
+        
+    if sports_mode == 'only':
+        where_clauses.append("(s.content_type = 'Sports' OR s.id IN (SELECT show_id FROM show_genres WHERE genre IN ('Sport', 'Sports')))")
+    elif sports_mode == 'exclude':
+        where_clauses.append("(s.content_type IS NULL OR s.content_type != 'Sports') AND s.id NOT IN (SELECT show_id FROM show_genres WHERE genre IN ('Sport', 'Sports'))")
+        
+    params = params_prefix
+    
+    if filter_platform:
+        placeholders = ', '.join(['%s'] * len(filter_platform))
+        where_clauses.append(f"s.platform IN ({placeholders})")
+        params.extend(filter_platform)
+    
+    if filter_content_type:
+        placeholders = ', '.join(['%s'] * len(filter_content_type))
+        where_clauses.append(f"s.content_type IN ({placeholders})")
+        params.extend(filter_content_type)
+    
+    if filter_content_format:
+        placeholders = ', '.join(['%s'] * len(filter_content_format))
+        where_clauses.append(f"s.content_format IN ({placeholders})")
+        params.extend(filter_content_format)
+    
+    if filter_paid_free:
+        placeholders = ', '.join(['%s'] * len(filter_paid_free))
+        where_clauses.append(f"s.paid_free IN ({placeholders})")
+        params.extend(filter_paid_free)
+    
+    if reach_min:
+        where_clauses.append("s.reach >= %s")
+        params.append(float(reach_min))
+    
+    if reach_max:
+        where_clauses.append("s.reach <= %s")
+        params.append(float(reach_max))
+    
+    # Genre filter
+    if filter_genre:
+        db_genres_rows, _ = get_db_data("SELECT DISTINCT genre FROM show_genres")
+        raw_matches = []
+        for row in db_genres_rows:
+            db_gen = row[0]
+            if db_gen and normalize_genre(db_gen) in filter_genre:
+                raw_matches.append(db_gen)
+        
+        if raw_matches:
+            placeholders = ', '.join(['%s'] * len(raw_matches))
+            where_clauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
+            params.extend(raw_matches)
+        else:
+            where_clauses.append("1=0")
+    
+    # Language filter
+    if filter_language:
+        lang_conditions = []
+        for lang in filter_language:
+            lang_conditions.append("s.languages LIKE %s")
+            params.append(f"%{lang}%")
+        where_clauses.append(f"({' OR '.join(lang_conditions)})")
+    
+    # Gender filter
+    if filter_gender == 'male':
+        where_clauses.append("s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5)")
+    elif filter_gender == 'female':
+        where_clauses.append("s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5)")
+    
+    where_sql = " AND ".join(where_clauses)
+    
+    # Count total matching items
+    count_query = f"SELECT COUNT(*) FROM shows s WHERE {where_sql}"
+    count_rows, _ = get_db_data(count_query, tuple(params) if params else None)
+    total_items = count_rows[0][0] if count_rows else 0
+    total_pages = math.ceil(total_items / per_page) if total_items > 0 else 1
+    
+    # Clamp page
+    page = max(1, min(page, total_pages))
+    offset = (page - 1) * per_page
+    
+    # Fetch paginated shows
+    shows_query = f"""
+        SELECT s.id, s.title, s.type, s.release_year, s.end_year, s.global_rating, s.global_vote_count, 
+               s.runtime_seconds, s.certificate, s.plot, s.poster_url, s.current_rank, s.creators, s.stars,
+               s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
+        FROM shows s
+        WHERE {where_sql}
+        ORDER BY s.global_rating DESC NULLS LAST
+        LIMIT %s OFFSET %s
+    """
+    all_params = list(params) + [per_page, offset]
+    shows_rows, shows_cols = get_db_data(shows_query, tuple(all_params))
+    
+    shows = []
+    for idx, row in enumerate(shows_rows):
+        show = dict(zip(shows_cols, row))
+        if show['global_rating'] is not None:
+            show['global_rating'] = float(show['global_rating'])
+        if show['reach'] is not None:
+            show['reach'] = round(float(show['reach']), 2)
+        show['display_rank'] = offset + idx + 1
+        shows.append(show)
+        
+    # Fetch genres mapping for displayed shows
+    genre_rows, _ = get_db_data("SELECT show_id, genre FROM show_genres")
+    genres_by_show = {}
+    for r in genre_rows:
+        show_id, genre = r[0], r[1]
+        norm_genre = normalize_genre(genre)
+        if not norm_genre:
+            continue
+        if show_id not in genres_by_show:
+            genres_by_show[show_id] = set()
+        genres_by_show[show_id].add(norm_genre)
+        
+    for show in shows:
+        show['genres'] = sorted(list(genres_by_show.get(show['id'], [])))
+    
+    # Stats for filtered results
+    stats_query = f"""
+        SELECT COUNT(*), 
+               COALESCE(AVG(s.reach), 0),
+               COALESCE(MAX(s.reach), 0),
+               COALESCE(AVG(CASE WHEN s.global_rating IS NOT NULL THEN s.global_rating END), 0)
+        FROM shows s WHERE {where_sql}
+    """
+    stats_rows, _ = get_db_data(stats_query, tuple(params) if params else None)
+    
+    stats = {
+        'total_shows': total_items,
+        'avg_reach': f"{float(stats_rows[0][1]):.2f}" if stats_rows else "0",
+        'max_reach': f"{float(stats_rows[0][2]):.2f}" if stats_rows else "0",
+        'avg_rating': f"{float(stats_rows[0][3]):.1f}" if stats_rows else "0",
+    }
+    
+    # Get all distinct values for filter dropdowns
+    platforms_data, _ = get_db_data("SELECT DISTINCT platform FROM shows WHERE platform IS NOT NULL AND current_rank IS NOT NULL ORDER BY platform")
+    genres_data, _ = get_db_data("SELECT DISTINCT genre FROM show_genres ORDER BY genre")
+    content_types_data, _ = get_db_data("SELECT DISTINCT content_type FROM shows WHERE content_type IS NOT NULL AND current_rank IS NOT NULL ORDER BY content_type")
+    content_formats_data, _ = get_db_data("SELECT DISTINCT content_format FROM shows WHERE content_format IS NOT NULL AND current_rank IS NOT NULL ORDER BY content_format")
+    paid_free_data, _ = get_db_data("SELECT DISTINCT paid_free FROM shows WHERE paid_free IS NOT NULL AND current_rank IS NOT NULL ORDER BY paid_free")
+    
+    # Extract unique languages
+    all_langs_rows, _ = get_db_data("SELECT DISTINCT languages FROM shows WHERE languages IS NOT NULL AND current_rank IS NOT NULL")
+    all_languages = set()
+    for r in all_langs_rows:
+        if r[0]:
+            for lang in r[0].split(','):
+                lang = lang.strip()
+                if lang:
+                    all_languages.add(lang)
+    all_languages = sorted(all_languages)
+    
+    # Reach range
+    reach_range_rows, _ = get_db_data("SELECT MIN(reach), MAX(reach) FROM shows WHERE reach IS NOT NULL AND current_rank IS NOT NULL")
+    reach_range = {
+        'min': round(float(reach_range_rows[0][0]), 1) if reach_range_rows and reach_range_rows[0][0] else 0,
+        'max': round(float(reach_range_rows[0][1]), 1) if reach_range_rows and reach_range_rows[0][1] else 100
+    }
+    
+    # Platform gender data
+    platform_gender_rows, pg_cols = get_db_data("SELECT platform, total_reach, male_pct, female_pct FROM platform_gender ORDER BY total_reach DESC")
+    platform_gender = []
+    for r in platform_gender_rows:
+        pg = dict(zip(pg_cols, r))
+        pg['total_reach'] = round(float(pg['total_reach']), 2) if pg['total_reach'] else 0
+        pg['male_pct'] = round(float(pg['male_pct']) * 100, 1) if pg['male_pct'] else 0
+        pg['female_pct'] = round(float(pg['female_pct']) * 100, 1) if pg['female_pct'] else 0
+        platform_gender.append(pg)
+    
+    filter_options = {
+        'platforms': [r[0] for r in platforms_data],
+        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0] and normalize_genre(r[0]) not in ['Sport', 'Sports']))),
+        'content_types': [r[0] for r in content_types_data],
+        'content_formats': [r[0] for r in content_formats_data],
+        'paid_free': [r[0] for r in paid_free_data],
+        'languages': all_languages,
+    }
+    
+    pagination = {
+        'page': page,
+        'total_pages': total_pages,
+        'has_prev': page > 1,
+        'has_next': page < total_pages,
+        'prev_num': page - 1,
+        'next_num': page + 1
+    }
+    
+    return jsonify({
+        'shows': shows,
+        'stats': stats,
+        'pagination': pagination,
+        'filter_options': filter_options,
+        'reach_range': reach_range,
+        'platform_gender': platform_gender
+    })
+
+
+@app.route("/api/show/<show_id>/json")
+def api_show_detail_json(show_id):
+    # Fetch show main details
+    show_rows, show_cols = get_db_data("""
+        SELECT id, title, type, release_year, end_year, global_rating, global_vote_count, 
+               runtime_seconds, certificate, plot, poster_url, current_rank, creators, stars,
+               platform, content_format, paid_free, content_type, languages, reach, week, market
+        FROM shows 
+        WHERE id = %s
+    """, (show_id,))
+    
+    if not show_rows:
+        return jsonify({'error': 'Show not found'}), 404
+        
+    show = dict(zip(show_cols, show_rows[0]))
+    if show['global_rating'] is not None:
+        show['global_rating'] = float(show['global_rating'])
+    if show['reach'] is not None:
+        show['reach'] = round(float(show['reach']), 2)
+        
+    # Fetch genres
+    genre_rows, _ = get_db_data("SELECT genre FROM show_genres WHERE show_id = %s", (show_id,))
+    show['genres'] = sorted(list(set(normalize_genre(r[0]) for r in genre_rows if r[0])))
+    
+    # Fetch country ratings
+    country_rows, country_cols = get_db_data("""
+        SELECT country_code, country_name, rating, vote_count 
+        FROM show_country_ratings 
+        WHERE show_id = %s 
+        ORDER BY vote_count DESC
+    """, (show_id,))
+    
+    country_ratings = []
+    for r in country_rows:
+        cr = dict(zip(country_cols, r))
+        if cr['rating'] is not None:
+            cr['rating'] = float(cr['rating'])
+        country_ratings.append(cr)
+        
+    # Fetch reviews
+    reviews_rows, reviews_cols = get_db_data("""
+        SELECT id, author_username, author_id, rating, summary, content, 
+               submission_date, up_votes, down_votes, is_spoiler 
+        FROM show_reviews 
+        WHERE show_id = %s 
+        ORDER BY submission_date DESC
+    """, (show_id,))
+    
+    reviews = []
+    for r in reviews_rows:
+        rev = dict(zip(reviews_cols, r))
+        if rev['submission_date']:
+            rev['submission_date'] = str(rev['submission_date'])
+        reviews.append(rev)
+        
+    # Fetch weekly ranking history
+    history_rows, _ = get_db_data("""
+        SELECT week, current_rank, reach 
+        FROM show_weekly_rankings 
+        WHERE show_id = %s 
+        ORDER BY week ASC
+    """, (show_id,))
+    
+    def sort_history_key(row):
+        w_code = row[0]
+        import re
+        match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(w_code))
+        if match:
+            return (int(match.group(2)), int(match.group(1)))
+        return (0, 0)
+        
+    sorted_history = sorted(history_rows, key=sort_history_key)
+    
+    weekly_history = []
+    for r in sorted_history:
+        weekly_history.append({
+            'week': r[0],
+            'rank': int(r[1]) if r[1] is not None else None,
+            'reach': round(float(r[2]), 2) if r[2] is not None else 0.0
+        })
+        
+    return jsonify({
+        'show': show,
+        'country_ratings': country_ratings,
+        'reviews': reviews,
+        'weekly_history': weekly_history
+    })
+
+
 @app.route("/api/filters")
 def api_filters():
     """Return all filter options as JSON for dynamic filtering."""
@@ -685,6 +1023,325 @@ def analytics():
         available_weeks=available_weeks,
         selected_week=selected_week
     )
+
+
+@app.route("/api/analytics")
+def api_analytics_json():
+    # Check if we have weekly rankings table populated
+    has_rankings_row, _ = get_db_data("SELECT 1 FROM show_weekly_rankings LIMIT 1")
+    use_rankings_table = bool(has_rankings_row)
+
+    available_weeks = []
+    selected_week = None
+
+    if use_rankings_table:
+        weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings")
+        def sort_weeks_key(w_code):
+            import re
+            match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(w_code))
+            if match:
+                return (int(match.group(2)), int(match.group(1)))
+            return (0, 0)
+        available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key, reverse=True)
+        
+        selected_week = request.args.get("week")
+        if not selected_week and available_weeks:
+            selected_week = available_weeks[0]
+
+    # Fallback default if not set or empty
+    if not selected_week:
+        selected_week = "WK-26,2026"
+
+    # Query 1: Top 10 content
+    if use_rankings_table:
+        top_shows_rows, top_shows_cols = get_db_data("""
+            SELECT s.title, w.reach, s.global_rating 
+            FROM shows s 
+            JOIN show_weekly_rankings w ON s.id = w.show_id 
+            WHERE w.week = %s 
+              AND w.current_rank IS NOT NULL 
+              AND (w.content_type IS NULL OR LOWER(w.content_type) != 'sports')
+            ORDER BY w.current_rank ASC 
+            LIMIT 10
+        """, (selected_week,))
+    else:
+        top_shows_rows, top_shows_cols = get_db_data("""
+            SELECT title, reach, global_rating 
+            FROM shows 
+            WHERE current_rank IS NOT NULL 
+              AND (content_type IS NULL OR LOWER(content_type) != 'sports')
+            ORDER BY current_rank ASC 
+            LIMIT 10
+        """)
+        
+    top_shows = []
+    for row in top_shows_rows:
+        show = dict(zip(top_shows_cols, row))
+        show['reach'] = float(show['reach']) if show['reach'] is not None else 0.0
+        show['global_rating'] = float(show['global_rating']) if show['global_rating'] is not None else 0.0
+        top_shows.append(show)
+    top_shows = sorted(top_shows, key=lambda x: x['reach'], reverse=True)
+
+    # Query 2: Platform distribution
+    if use_rankings_table:
+        platform_rows, platform_cols = get_db_data("""
+            SELECT w.platform, COUNT(*) as count 
+            FROM show_weekly_rankings w 
+            WHERE w.week = %s AND w.platform IS NOT NULL AND w.current_rank IS NOT NULL 
+            GROUP BY w.platform 
+            ORDER BY count DESC
+        """, (selected_week,))
+    else:
+        platform_rows, platform_cols = get_db_data("""
+            SELECT platform, COUNT(*) as count 
+            FROM shows 
+            WHERE platform IS NOT NULL AND current_rank IS NOT NULL 
+            GROUP BY platform 
+            ORDER BY count DESC
+        """)
+    platforms = []
+    for row in platform_rows:
+        platforms.append({
+            'platform': row[0],
+            'count': int(row[1])
+        })
+
+    # Query 2b: Format distribution by reach
+    if use_rankings_table:
+        format_rows, _ = get_db_data("""
+            SELECT w.content_format, SUM(w.reach) as total_reach 
+            FROM show_weekly_rankings w 
+            WHERE w.week = %s AND w.content_format IS NOT NULL AND w.reach IS NOT NULL AND w.current_rank IS NOT NULL 
+            GROUP BY w.content_format 
+            ORDER BY total_reach DESC
+        """, (selected_week,))
+    else:
+        format_rows, _ = get_db_data("""
+            SELECT content_format, SUM(reach) as total_reach 
+            FROM shows 
+            WHERE content_format IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL 
+            GROUP BY content_format 
+            ORDER BY total_reach DESC
+        """)
+    formats_by_reach = []
+    for row in format_rows:
+        formats_by_reach.append({
+            'format': row[0],
+            'reach': round(float(row[1]), 2)
+        })
+
+    # Query 3: Genre reach
+    if use_rankings_table:
+        genre_rows, _ = get_db_data("""
+            SELECT w.show_id, w.reach, g.genre 
+            FROM show_weekly_rankings w 
+            JOIN show_genres g ON w.show_id = g.show_id 
+            WHERE w.week = %s AND w.reach IS NOT NULL AND w.current_rank IS NOT NULL
+        """, (selected_week,))
+    else:
+        genre_rows, _ = get_db_data("""
+            SELECT s.id, s.reach, g.genre 
+            FROM shows s 
+            JOIN show_genres g ON s.id = g.show_id 
+            WHERE s.reach IS NOT NULL AND s.current_rank IS NOT NULL
+        """)
+    
+    show_genres_map = {}
+    for show_id, reach, genre in genre_rows:
+        norm_genre = normalize_genre(genre)
+        if not norm_genre:
+            continue
+        if show_id not in show_genres_map:
+            show_genres_map[show_id] = (float(reach) if reach is not None else 0.0, set())
+        show_genres_map[show_id][1].add(norm_genre)
+        
+    genre_reach_map = {}
+    for show_id, (reach, genres) in show_genres_map.items():
+        for genre in genres:
+            genre_reach_map[genre] = genre_reach_map.get(genre, 0.0) + reach
+            
+    total_genre_reach = sum(genre_reach_map.values())
+    genre_percentages = []
+    if total_genre_reach > 0:
+        for genre, reach in genre_reach_map.items():
+            pct = (reach / total_genre_reach) * 100
+            genre_percentages.append({
+                'genre': genre,
+                'reach': round(reach, 2),
+                'percentage': round(pct, 2)
+            })
+        genre_percentages = sorted(genre_percentages, key=lambda x: x['percentage'], reverse=True)
+
+    # Query 4: Language reach
+    if use_rankings_table:
+        lang_rows, _ = get_db_data("""
+            SELECT w.show_id, w.reach, s.languages 
+            FROM show_weekly_rankings w 
+            JOIN shows s ON w.show_id = s.id 
+            WHERE w.week = %s AND s.languages IS NOT NULL AND w.reach IS NOT NULL AND w.current_rank IS NOT NULL
+        """, (selected_week,))
+    else:
+        lang_rows, _ = get_db_data("""
+            SELECT id, reach, languages 
+            FROM shows 
+            WHERE languages IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL
+        """)
+        
+    show_langs_map = {}
+    for show_id, reach, languages_str in lang_rows:
+        if not languages_str:
+            continue
+        parts = languages_str.split(',')
+        unique_langs = set()
+        for p in parts:
+            lang = p.strip().title()
+            if lang:
+                unique_langs.add(lang)
+        show_langs_map[show_id] = (float(reach) if reach is not None else 0.0, unique_langs)
+        
+    lang_reach_map = {}
+    for show_id, (reach, langs) in show_langs_map.items():
+        for lang in langs:
+            lang_reach_map[lang] = lang_reach_map.get(lang, 0.0) + reach
+            
+    total_lang_reach = sum(lang_reach_map.values())
+    lang_percentages = []
+    if total_lang_reach > 0:
+        for lang, reach in lang_reach_map.items():
+            pct = (reach / total_lang_reach) * 100
+            lang_percentages.append({
+                'language': lang,
+                'reach': round(reach, 2),
+                'percentage': round(pct, 2)
+            })
+        lang_percentages = sorted(lang_percentages, key=lambda x: x['percentage'], reverse=True)
+
+    # Load metadata from metadata.json
+    metadata = {
+        "time_period": "WK-26, 2026 ( 27 Jun 2026 - 3 Jul 2026 )",
+        "market": "ALL INDIA"
+    }
+    if os.path.exists("metadata.json"):
+        try:
+            with open("metadata.json", "r") as f:
+                loaded_meta = json.load(f)
+                # If nested week dictionary
+                if selected_week in loaded_meta:
+                    metadata = loaded_meta[selected_week]
+                # Fallback for old single-week metadata format
+                elif "time_period" in loaded_meta:
+                    metadata = loaded_meta
+        except Exception as e:
+            print(f"Warning: Could not read metadata.json: {e}")
+
+    return jsonify({
+        'top_shows': top_shows,
+        'platforms': platforms,
+        'formats_by_reach': formats_by_reach,
+        'genre_percentages': genre_percentages,
+        'lang_percentages': lang_percentages,
+        'metadata': metadata,
+        'available_weeks': available_weeks,
+        'selected_week': selected_week
+    })
+
+
+@app.route("/api/platform_analytics")
+def api_platform_analytics():
+    # 1. Total content count platform-wise
+    plat_rows, _ = get_db_data("""
+        SELECT platform, COUNT(*) as count 
+        FROM shows 
+        WHERE platform IS NOT NULL 
+        GROUP BY platform 
+        ORDER BY count DESC
+    """)
+    platforms = []
+    for r in plat_rows:
+        platforms.append({
+            'platform': r[0],
+            'count': int(r[1])
+        })
+        
+    # 2. Paid vs Free count platform-wise
+    paid_free_rows, _ = get_db_data("""
+        SELECT platform, paid_free, COUNT(*) as count 
+        FROM shows 
+        WHERE platform IS NOT NULL AND paid_free IS NOT NULL 
+        GROUP BY platform, paid_free
+    """)
+    
+    paid_free_data = {}
+    for r in paid_free_rows:
+        plat = r[0]
+        pf_type = r[1]
+        count = int(r[2])
+        if plat not in paid_free_data:
+            paid_free_data[plat] = {'Paid': 0, 'Free': 0}
+        
+        if pf_type in ['Paid', 'Free']:
+            paid_free_data[plat][pf_type] = count
+        elif pf_type.lower() == 'paid':
+            paid_free_data[plat]['Paid'] = count
+        elif pf_type.lower() == 'free':
+            paid_free_data[plat]['Free'] = count
+            
+    paid_free_list = []
+    for plat, counts in paid_free_data.items():
+        paid_free_list.append({
+            'platform': plat,
+            'Paid': counts['Paid'],
+            'Free': counts['Free']
+        })
+        
+    response = jsonify({
+        'platforms': platforms,
+        'paid_free': paid_free_list
+    })
+    response.headers['Cache-Control'] = 'public, max-age=300'  # cache 5 minutes
+    return response
+
+
+@app.route("/api/all_shows")
+def api_all_shows():
+    shows_rows, _ = get_db_data("SELECT id, title FROM shows ORDER BY title")
+    shows = [{'id': r[0], 'title': r[1]} for r in shows_rows]
+    return jsonify({'shows': shows})
+
+
+
+@app.route("/api/trending_metadata")
+def api_trending_metadata():
+    weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings")
+    def sort_weeks_key(w_code):
+        import re
+        match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(w_code))
+        if match:
+            return (int(match.group(2)), int(match.group(1)))
+        return (0, 0)
+    available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key)
+    
+    latest_metadata = {
+        "time_period": "Historical Trends",
+        "market": "ALL INDIA"
+    }
+    if available_weeks and os.path.exists("metadata.json"):
+        try:
+            with open("metadata.json", "r") as f:
+                loaded_meta = json.load(f)
+                latest_week = available_weeks[-1]
+                if latest_week in loaded_meta:
+                    latest_metadata = loaded_meta[latest_week]
+                elif "time_period" in loaded_meta:
+                    latest_metadata = loaded_meta
+        except Exception:
+            pass
+            
+    return jsonify({
+        'weeks': available_weeks,
+        'metadata': latest_metadata
+    })
+
 
 @app.route("/trending")
 def trending():

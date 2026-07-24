@@ -12,8 +12,9 @@ import openpyxl
 
 import db
 
-# Load configurations
-load_dotenv()
+# Load environment variables relative to scraper.py directory
+basedir = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(basedir, '.env'))
 
 SCRAPE_LIMIT = int(os.getenv("SCRAPE_LIMIT", "10"))
 REVIEWS_LIMIT = int(os.getenv("REVIEWS_LIMIT", "10"))
@@ -333,12 +334,37 @@ def read_excel_shows(filepath):
     market = ws.cell(row=7, column=2).value or "ALL INDIA"
     if time_period:
         try:
+            week_val = ws.cell(row=7, column=1).value or "WK-26,2026"
+            week_key = str(week_val).strip().replace(" ", "")
+            
+            existing_meta = {}
+            if os.path.exists("metadata.json"):
+                try:
+                    with open("metadata.json", "r") as f:
+                        loaded = json.load(f)
+                        if isinstance(loaded, dict) and "time_period" not in loaded:
+                            existing_meta = loaded
+                        elif isinstance(loaded, dict) and "time_period" in loaded:
+                            # Convert old single-week format to dict
+                            old_key = "WK-26,2026"
+                            if "WK-27" in loaded["time_period"]:
+                                old_key = "WK-27,2026"
+                            existing_meta = {old_key: loaded}
+                except Exception:
+                    pass
+            
+            # Clean up potential typos (e.g. if the cell text starts with WK-26 when it is actually WK-27)
+            clean_time_period = str(time_period).strip()
+            if "WK-27" in week_key and clean_time_period.startswith("WK-26"):
+                clean_time_period = clean_time_period.replace("WK-26", "WK-27", 1)
+            
+            existing_meta[week_key] = {
+                "time_period": clean_time_period,
+                "market": str(market).strip()
+            }
             with open("metadata.json", "w") as f:
-                json.dump({
-                    "time_period": str(time_period).strip(),
-                    "market": str(market).strip()
-                }, f)
-            print(f"Saved metadata: {time_period} | {market}")
+                json.dump(existing_meta, f, indent=4)
+            print(f"Saved metadata for {week_key}: {clean_time_period} | {market}")
         except Exception as e:
             print(f"Warning: Could not save metadata.json: {e}")
             
@@ -779,18 +805,6 @@ def main():
                     except Exception as wr_err:
                         conn.rollback()
                         print(f"  Error saving weekly ranking: {wr_err}")
-            
-            # Save the latest metadata after importing all files
-            if latest_time_period:
-                try:
-                    with open("metadata.json", "w") as f:
-                        json.dump({
-                            "time_period": latest_time_period,
-                            "market": latest_market
-                        }, f)
-                    print(f"\nSaved latest metadata: {latest_time_period} | {latest_market}")
-                except Exception as meta_err:
-                    print(f"Warning: Failed to save metadata.json: {meta_err}")
             
             print("\nExcel Import process finished successfully.")
         finally:

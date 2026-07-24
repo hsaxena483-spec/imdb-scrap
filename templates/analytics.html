@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COTT Analytics - Content Visualizations</title>
     <meta name="description" content="Detailed analytics and visualizations of the scraped IMDb content, including reach, rating, platform, genre, and language distributions.">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=4">
     <!-- Load Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -44,6 +44,7 @@
     <nav class="glass-panel">
         <div class="nav-container">
             <a href="/" class="brand">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="COTT Logo" class="brand-logo-img" width="40" height="40">
                 <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
             <div class="nav-links">

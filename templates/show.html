@@ -4,12 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ show.title }} - COTT Analytics</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=4">
 </head>
 <body>
     <nav class="glass-panel">
         <div class="nav-container">
             <a href="/" class="brand">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="COTT Logo" class="brand-logo-img" width="40" height="40">
                 <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
             <div class="nav-links">
@@ -50,9 +51,6 @@
                     <span class="info-label">Release Year</span>
                     <span class="info-value">{{ show.release_year }}{% if show.end_year %} - {{ show.end_year }}{% elif show.type == 'tvSeries' %}+ (Ongoing){% endif %}</span>
                     
-                    <span class="info-label">Certificate</span>
-                    <span class="info-value">{{ show.certificate or 'N/A' }}</span>
-                    
                     <span class="info-label">Runtime</span>
                     <span class="info-value">
                         {% if show.runtime_seconds %}
@@ -73,9 +71,6 @@
                         {% endif %}
                     </span>
                     
-                    <span class="info-label">Creators</span>
-                    <span class="info-value">{{ show.creators or 'N/A' }}</span>
-                    
                     <span class="info-label">Stars</span>
                     <span class="info-value">{{ show.stars or 'N/A' }}</span>
                 </div>
@@ -86,28 +81,21 @@
         {% if weekly_history %}
         <section class="trend-section" style="margin-top: 32px; margin-bottom: 32px;">
             <h2 class="section-title">Historical Performance (8-Week Trend)</h2>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                <!-- Reach Chart -->
-                <div class="glass-panel" style="padding: 20px; border-radius: 12px;">
-                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-                        <div style="width:14px;height:14px;border-radius:50%;background:#6366f1;"></div>
-                        <span style="font-size:15px;font-weight:700;color:#e5e7eb;">Weekly Reach</span>
-                        <span style="font-size:12px;color:#6366f1;margin-left:auto;">Millions of Viewers</span>
+            <div class="glass-panel" style="padding: 24px; border-radius: 12px;">
+                <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 24px; margin-bottom: 20px;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="width: 14px; height: 14px; border-radius: 50%; background: #6366f1;"></div>
+                        <span style="font-size: 15px; font-weight: 700; color: #e5e7eb;">Weekly Reach</span>
+                        <span style="font-size: 12px; color: #6366f1;">(Millions of Viewers)</span>
                     </div>
-                    <div style="height: 260px; position: relative;">
-                        <canvas id="reachChart"></canvas>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <div style="width: 14px; height: 14px; border-radius: 50%; background: #eab308;"></div>
+                        <span style="font-size: 15px; font-weight: 700; color: #e5e7eb;">Weekly Rank</span>
+                        <span style="font-size: 12px; color: #eab308;">(#1 = Best Rank)</span>
                     </div>
                 </div>
-                <!-- Rank Chart -->
-                <div class="glass-panel" style="padding: 20px; border-radius: 12px;">
-                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-                        <div style="width:14px;height:14px;border-radius:50%;background:#eab308;"></div>
-                        <span style="font-size:15px;font-weight:700;color:#e5e7eb;">Weekly Rank</span>
-                        <span style="font-size:12px;color:#eab308;margin-left:auto;">#1 = Best Rank</span>
-                    </div>
-                    <div style="height: 260px; position: relative;">
-                        <canvas id="rankChart"></canvas>
-                    </div>
+                <div style="height: 350px; position: relative;">
+                    <canvas id="historyChart"></canvas>
                 </div>
             </div>
         </section>
@@ -197,139 +185,152 @@
             ...extra
         });
 
-        // ── Pill label plugin ────────────────────────────────────────────────
-        function makePillPlugin(color, formatter) {
-            return {
-                id: 'pillLabels_' + color,
-                afterDraw(chart) {
-                    const ctx = chart.ctx;
-                    ctx.save();
-                    chart.data.datasets.forEach((ds, di) => {
-                        const meta = chart.getDatasetMeta(di);
-                        if (meta.hidden) return;
-                        meta.data.forEach((pt, i) => {
-                            const val = ds.data[i];
-                            if (val === null || val === undefined) return;
-                            const label = formatter(val);
-                            ctx.font = 'bold 11px Inter, sans-serif';
-                            const tw = ctx.measureText(label).width;
-                            const pw = tw + 16, ph = 20, pr = 10;
-                            const px = pt.x - pw / 2, py = pt.y - ph - 10;
-                            // pill background
-                            ctx.beginPath();
-                            ctx.moveTo(px + pr, py);
-                            ctx.lineTo(px + pw - pr, py);
-                            ctx.quadraticCurveTo(px + pw, py, px + pw, py + pr);
-                            ctx.lineTo(px + pw, py + ph - pr);
-                            ctx.quadraticCurveTo(px + pw, py + ph, px + pw - pr, py + ph);
-                            ctx.lineTo(px + pr, py + ph);
-                            ctx.quadraticCurveTo(px, py + ph, px, py + ph - pr);
-                            ctx.lineTo(px, py + pr);
-                            ctx.quadraticCurveTo(px, py, px + pr, py);
-                            ctx.closePath();
-                            ctx.fillStyle = color;
-                            ctx.fill();
-                            // text
-                            ctx.fillStyle = '#fff';
-                            ctx.textAlign = 'center';
-                            ctx.textBaseline = 'middle';
-                            ctx.fillText(label, pt.x, py + ph / 2);
-                        });
+        // ── Pill label plugin (supports multiple datasets) ───────────────────
+        const pillLabelsPlugin = {
+            id: 'pillLabels',
+            afterDraw(chart) {
+                const ctx = chart.ctx;
+                ctx.save();
+                chart.data.datasets.forEach((ds, di) => {
+                    const meta = chart.getDatasetMeta(di);
+                    if (meta.hidden) return;
+                    meta.data.forEach((pt, i) => {
+                        const val = ds.data[i];
+                        if (val === null || val === undefined) return;
+                        
+                        const formatter = ds.pillFormatter || (v => v);
+                        const color = ds.pillColor || 'rgba(0,0,0,0.8)';
+                        const label = formatter(val);
+                        
+                        ctx.font = 'bold 11px Inter, sans-serif';
+                        const tw = ctx.measureText(label).width;
+                        const pw = tw + 16, ph = 20, pr = 10;
+                        
+                        const py = ds.pillPosition === 'below' ? pt.y + 10 : pt.y - ph - 10;
+                        const px = pt.x - pw / 2;
+                        
+                        // pill background
+                        ctx.beginPath();
+                        ctx.moveTo(px + pr, py);
+                        ctx.lineTo(px + pw - pr, py);
+                        ctx.quadraticCurveTo(px + pw, py, px + pw, py + pr);
+                        ctx.lineTo(px + pw, py + ph - pr);
+                        ctx.quadraticCurveTo(px + pw, py + ph, px + pw - pr, py + ph);
+                        ctx.lineTo(px + pr, py + ph);
+                        ctx.quadraticCurveTo(px, py + ph, px, py + ph - pr);
+                        ctx.lineTo(px, py + pr);
+                        ctx.quadraticCurveTo(px, py, px + pr, py);
+                        ctx.closePath();
+                        ctx.fillStyle = color;
+                        ctx.fill();
+                        
+                        // text
+                        ctx.fillStyle = '#fff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(label, pt.x, py + ph / 2);
                     });
-                    ctx.restore();
+                });
+                ctx.restore();
+            }
+        };
+
+        // ── Combined History Chart ───────────────────────────────────────────
+        const canvas = document.getElementById('historyChart');
+        if (canvas) {
+            const ctx = canvas.getContext('2d');
+            const reachGrad = ctx.createLinearGradient(0,0,0,320);
+            reachGrad.addColorStop(0, 'rgba(99,102,241,0.22)');
+            reachGrad.addColorStop(1, 'rgba(99,102,241,0.0)');
+
+            new Chart(canvas, {
+                type: 'line',
+                plugins: [pillLabelsPlugin],
+                data: {
+                    labels: weeks,
+                    datasets: [
+                        {
+                            label: 'Weekly Reach (Millions)',
+                            data: reach,
+                            borderColor: '#6366f1',
+                            backgroundColor: reachGrad,
+                            borderWidth: 3,
+                            fill: true,
+                            tension: 0.4,
+                            pointBackgroundColor: '#6366f1',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            pointRadius: 7,
+                            pointHoverRadius: 10,
+                            yAxisID: 'yReach',
+                            pillColor: 'rgba(99,102,241,0.95)',
+                            pillFormatter: v => parseFloat(v).toFixed(1) + 'M',
+                            pillPosition: 'above'
+                        },
+                        {
+                            label: 'Weekly Rank',
+                            data: ranks,
+                            borderColor: '#eab308',
+                            backgroundColor: 'transparent',
+                            borderWidth: 3,
+                            fill: false,
+                            tension: 0.4,
+                            pointBackgroundColor: '#eab308',
+                            pointBorderColor: '#fff',
+                            pointBorderWidth: 2,
+                            pointRadius: 7,
+                            pointHoverRadius: 10,
+                            yAxisID: 'yRank',
+                            pillColor: 'rgba(234,179,8,0.95)',
+                            pillFormatter: v => '#' + parseInt(v),
+                            pillPosition: 'below'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: { padding: { top: 38, bottom: 4, left: 8, right: 8 } },
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(15,23,42,0.95)',
+                            titleColor: '#fff',
+                            bodyColor: '#e5e7eb',
+                            borderColor: 'rgba(255,255,255,0.15)',
+                            borderWidth: 1,
+                            padding: 12,
+                            callbacks: {
+                                label: context => {
+                                    if (context.datasetIndex === 0) {
+                                        return '  Reach: ' + parseFloat(context.raw).toFixed(1) + 'M viewers';
+                                    } else {
+                                        return '  Rank: #' + parseInt(context.raw);
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: sharedScaleX,
+                        yReach: sharedScaleY({
+                            position: 'left',
+                            ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + 'M' }
+                        }),
+                        yRank: sharedScaleY({
+                            position: 'right',
+                            reverse: true,
+                            grid: { display: false },
+                            ticks: { color: '#94a3b8', font: { size: 11 }, stepSize: 1, precision: 0, callback: v => '#' + v }
+                        })
+                    }
                 }
-            };
+            });
         }
-
-        // ── Reach Chart ──────────────────────────────────────────────────────
-        const reachGrad = document.getElementById('reachChart').getContext('2d').createLinearGradient(0,0,0,260);
-        reachGrad.addColorStop(0, 'rgba(99,102,241,0.3)');
-        reachGrad.addColorStop(1, 'rgba(99,102,241,0.0)');
-
-        new Chart(document.getElementById('reachChart'), {
-            type: 'line',
-            plugins: [makePillPlugin('rgba(99,102,241,0.95)', v => parseFloat(v).toFixed(1) + 'M')],
-            data: {
-                labels: weeks,
-                datasets: [{
-                    data: reach,
-                    borderColor: '#6366f1',
-                    backgroundColor: reachGrad,
-                    borderWidth: 3,
-                    fill: true,
-                    tension: 0.4,
-                    pointBackgroundColor: '#6366f1',
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2,
-                    pointRadius: 7,
-                    pointHoverRadius: 10
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                layout: { padding: { top: 38, bottom: 4 } },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: 'rgba(15,23,42,0.95)',
-                        titleColor: '#fff',
-                        bodyColor: '#e5e7eb',
-                        borderColor: 'rgba(255,255,255,0.15)',
-                        borderWidth: 1,
-                        padding: 12,
-                        callbacks: { label: ctx => '  Reach: ' + parseFloat(ctx.raw).toFixed(1) + 'M viewers' }
-                    }
-                },
-                scales: {
-                    x: sharedScaleX,
-                    y: sharedScaleY({ ticks: { color: '#94a3b8', font: { size: 11 }, callback: v => v + 'M' } })
-                }
-            }
-        });
-
-        // ── Rank Chart ───────────────────────────────────────────────────────
-        new Chart(document.getElementById('rankChart'), {
-            type: 'line',
-            plugins: [makePillPlugin('rgba(234,179,8,0.95)', v => '#' + parseInt(v))],
-            data: {
-                labels: weeks,
-                datasets: [{
-                    data: ranks,
-                    borderColor: '#eab308',
-                    backgroundColor: 'transparent',
-                    borderWidth: 3,
-                    fill: false,
-                    tension: 0.4,
-                    pointBackgroundColor: '#eab308',
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2,
-                    pointRadius: 7,
-                    pointHoverRadius: 10
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                layout: { padding: { top: 38, bottom: 4 } },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        backgroundColor: 'rgba(15,23,42,0.95)',
-                        titleColor: '#fff',
-                        bodyColor: '#e5e7eb',
-                        borderColor: 'rgba(255,255,255,0.15)',
-                        borderWidth: 1,
-                        padding: 12,
-                        callbacks: { label: ctx => '  Rank: #' + parseInt(ctx.raw) }
-                    }
-                },
-                scales: {
-                    x: sharedScaleX,
-                    y: sharedScaleY({ reverse: true, ticks: { color: '#94a3b8', font: { size: 11 }, stepSize: 1, precision: 0, callback: v => '#' + v } })
-                }
-            }
-        });
     });
     </script>
     {% endif %}

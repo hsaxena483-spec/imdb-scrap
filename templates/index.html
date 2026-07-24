@@ -5,12 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>COTT Analytics Dashboard</title>
     <meta name="description" content="Content analytics dashboard showing trending shows, movies, and live events with platform, genre, language, and reach filters.">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=3">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=4">
 </head>
 <body>
     <nav class="glass-panel">
         <div class="nav-container">
             <a href="/" class="brand">
+                <img src="{{ url_for('static', filename='logo.png') }}" alt="COTT Logo" class="brand-logo-img" width="40" height="40">
                 <div class="brand-logo">COTT<span>Analytics</span></div>
             </a>
             <!-- Global Search -->

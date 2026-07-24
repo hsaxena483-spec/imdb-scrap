@@ -90,6 +90,8 @@ nav {
     -webkit-text-fill-color: transparent;
     display: flex;
     align-items: center;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .brand-logo span {
@@ -98,6 +100,27 @@ nav {
     -webkit-text-fill-color: transparent;
     margin-left: 4px;
 }
+
+.brand-logo-img {
+    height: 40px;
+    width: 40px;
+    object-fit: contain;
+    display: block;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.03);
+    padding: 3px;
+    box-shadow: 0 0 12px rgba(236, 72, 153, 0.25);
+    transition: var(--transition);
+    flex-shrink: 0;
+}
+
+.brand:hover .brand-logo-img {
+    transform: scale(1.08) rotate(5deg);
+    border-color: rgba(255, 255, 255, 0.35);
+    box-shadow: 0 0 16px rgba(236, 72, 153, 0.45);
+}
+
 
 /* Navbar Search */
 .nav-search-form {

@@ -1,1 +1,34 @@
-{"time_period": "WK-26, 2026 ( 4 Jul 2026 - 10 Jul 2026 )", "market": "ALL INDIA"}
+{
+    "WK-20,2026": {
+        "time_period": "WK-20, 2026 ( 16 May 2026 - 22 May 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-21,2026": {
+        "time_period": "WK-21, 2026 ( 23 May 2026 - 29 May 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-22,2026": {
+        "time_period": "WK-22, 2026 ( 01 Jun 2026 - 07 Jun 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-23,2026": {
+        "time_period": "WK-23, 2026 ( 06 Jun 2026 - 12 Jun 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-24,2026": {
+        "time_period": "WK-24, 2026 ( 13 Jun 2026 - 19 Jun 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-25,2026": {
+        "time_period": "WK-25, 2026 ( 20 Jun 2026 - 26 Jun 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-26,2026": {
+        "time_period": "WK-26, 2026 ( 27 Jun 2026 - 3 Jul 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-27,2026": {
+        "time_period": "WK-27, 2026 ( 4 Jul 2026 - 10 Jul 2026 )",
+        "market": "ALL INDIA"
+    }
+}

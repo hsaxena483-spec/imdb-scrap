@@ -4,8 +4,9 @@ import psycopg2
 from psycopg2 import sql
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables relative to db.py directory
+basedir = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(basedir, '.env'))
 
 DB_TYPE = os.getenv("DB_TYPE", "postgresql").lower()
 DB_HOST = os.getenv("DB_HOST", "localhost")
