@@ -2,8 +2,10 @@ import os
 import math
 import json
 import urllib.parse
+import requests
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, make_response
 from dotenv import load_dotenv
+from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 import db
 
 # Load environment variables relative to app.py directory
@@ -11,6 +13,107 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(basedir, '.env'))
 
 app = Flask(__name__)
+
+JWT_SECRET = os.getenv("JWT_SECRET", "supersecret_jwt_signing_key")
+token_serializer = URLSafeTimedSerializer(JWT_SECRET)
+
+def requires_auth(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization token is missing"}), 401
+        
+        token = auth_header.split(" ")[1]
+        try:
+            # Token is valid for 30 days
+            user_id = token_serializer.loads(token, max_age=30 * 24 * 3600)
+        except SignatureExpired:
+            return jsonify({"error": "Token has expired"}), 401
+        except BadSignature:
+            return jsonify({"error": "Invalid token"}), 401
+            
+        conn, is_sqlite = get_db()
+        user = db.get_user(conn, is_sqlite, user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        if not user.get("is_active"):
+            return jsonify({"error": "Account is inactive"}), 403
+            
+        g.current_user = user
+        return f(*args, **kwargs)
+    return decorated
+
+@app.route("/api/auth/google", methods=["POST"])
+def google_auth():
+    data = request.get_json()
+    if not data or "credential" not in data:
+        return jsonify({"error": "Credential token is missing"}), 400
+        
+    id_token = data["credential"]
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "your_client_id")
+    
+    try:
+        # Call Google tokeninfo API to verify the ID token
+        token_info_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}"
+        response = requests.get(token_info_url)
+        if response.status_code != 200:
+            return jsonify({"error": "Invalid Google credential"}), 400
+            
+        user_info = response.json()
+        
+        # Verify audience matches client ID if CLIENT_ID is configured
+        if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_ID != "your_client_id":
+            aud = user_info.get("aud")
+            if aud != GOOGLE_CLIENT_ID:
+                return jsonify({"error": "Audience mismatch"}), 400
+                
+        user_id = user_info.get("sub")
+        email = user_info.get("email")
+        name = user_info.get("name")
+        picture = user_info.get("picture")
+        
+        if not email:
+            return jsonify({"error": "Email not found in Google profile"}), 400
+            
+        # Get connection
+        conn, is_sqlite = get_db()
+        
+        # Check if user already exists
+        existing_user = db.get_user(conn, is_sqlite, user_id)
+        
+        user_data = {
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "phone_number": existing_user.get("phone_number") if existing_user else None,
+            "user_role": existing_user.get("user_role") if existing_user else "normal user",
+            "is_active": existing_user.get("is_active") if existing_user else True,
+            "account_type": existing_user.get("account_type") if existing_user else "free",
+            "plan_status": existing_user.get("plan_status") if existing_user else "none"
+        }
+        
+        db.upsert_user(conn, is_sqlite, user_data)
+        
+        # Generate session token (valid for 30 days)
+        session_token = token_serializer.dumps(user_id)
+        
+        return jsonify({
+            "token": session_token,
+            "user": user_data
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in google_auth: {e}")
+        return jsonify({"error": "Authentication failed", "details": str(e)}), 500
+
+@app.route("/api/auth/me", methods=["GET"])
+@requires_auth
+def get_me():
+    return jsonify(g.current_user), 200
+
 
 @app.before_request
 def handle_options_preflight():

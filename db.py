@@ -187,6 +187,24 @@ def init_db():
             PRIMARY KEY (show_id, week)
         );
         """)
+
+        # 7. Create users table
+        print("Creating table: users...")
+        execute_query(conn, is_sqlite, """
+        CREATE TABLE IF NOT EXISTS users (
+            id VARCHAR(255) PRIMARY KEY,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(255),
+            picture VARCHAR(500),
+            phone_number VARCHAR(20),
+            user_role VARCHAR(50) DEFAULT 'normal user',
+            is_active BOOLEAN DEFAULT TRUE,
+            account_type VARCHAR(50) DEFAULT 'free',
+            plan_status VARCHAR(50) DEFAULT 'none',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
         
         if is_sqlite:
             conn.commit()
@@ -403,6 +421,51 @@ def save_weekly_ranking(conn, is_sqlite, ranking_data):
         ranking_data.get('market')
     )
     execute_query(conn, is_sqlite, query, params)
+
+def get_user(conn, is_sqlite, user_id):
+    """
+    Fetches a user by their Google subject ID.
+    """
+    query = "SELECT id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, created_at, updated_at FROM users WHERE id = %s"
+    try:
+        cursor = execute_query(conn, is_sqlite, query, (user_id,))
+        row = cursor.fetchone()
+        if row:
+            columns = [description[0] for description in cursor.description]
+            return dict(zip(columns, row))
+    except Exception as e:
+        print(f"Warning: Error fetching user {user_id}: {e}")
+    return None
+
+def upsert_user(conn, is_sqlite, user_data):
+    """
+    Creates or updates user details upon successful Google Login.
+    """
+    query = """
+    INSERT INTO users (
+        id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, updated_at
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+    ) ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name,
+        picture = EXCLUDED.picture,
+        phone_number = COALESCE(EXCLUDED.phone_number, users.phone_number),
+        updated_at = CURRENT_TIMESTAMP;
+    """
+    params = (
+        user_data.get('id'),
+        user_data.get('email'),
+        user_data.get('name'),
+        user_data.get('picture'),
+        user_data.get('phone_number'),
+        user_data.get('user_role', 'normal user'),
+        user_data.get('is_active', True),
+        user_data.get('account_type', 'free'),
+        user_data.get('plan_status', 'none')
+    )
+    execute_query(conn, is_sqlite, query, params)
+    if is_sqlite:
+        conn.commit()
 
 if __name__ == "__main__":
     init_db()
