@@ -1204,6 +1204,14 @@ def process_excel_file(filepath, job_id=None):
             try: driver.quit()
             except Exception: pass
         conn.close()
+        
+        # Clean up uploaded excel file to free server storage
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+                print(f"Cleaned up uploaded file: {filepath}")
+            except Exception as remove_err:
+                print(f"Warning: Could not remove uploaded file {filepath}: {remove_err}")
 
 if __name__ == "__main__":
     main()
