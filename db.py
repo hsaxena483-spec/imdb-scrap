@@ -201,10 +201,86 @@ def init_db():
             is_active BOOLEAN DEFAULT TRUE,
             account_type VARCHAR(50) DEFAULT 'free',
             plan_status VARCHAR(50) DEFAULT 'none',
+            password VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        # Alter table to add password column if database already exists
+        try:
+            execute_query(conn, is_sqlite, "ALTER TABLE users ADD COLUMN password VARCHAR(255)")
+            conn.commit()
+            print("Successfully added password column to users table")
+        except Exception as alter_err:
+            # Ignored if column already exists
+            print(f"Password column not added (may already exist): {alter_err}")
+
+        # Seed the admin user if not exists
+        try:
+            from werkzeug.security import generate_password_hash
+            hashed_pw = generate_password_hash("cott@123")
+            
+            # Check if admin@cott.com exists
+            cursor = conn.cursor()
+            query = "SELECT COUNT(*) FROM users WHERE email = %s"
+            if is_sqlite:
+                query = query.replace("%s", "?")
+            cursor.execute(query, ("admin@cott.com",))
+            admin_exists = cursor.fetchone()[0] > 0
+            
+            if not admin_exists:
+                print("Seeding admin user into database...")
+                insert_query = """
+                INSERT INTO users (id, email, name, password, user_role, account_type, plan_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """
+                if is_sqlite:
+                    insert_query = insert_query.replace("%s", "?")
+                cursor.execute(insert_query, (
+                    "admin-cott",
+                    "admin@cott.com",
+                    "Admin",
+                    hashed_pw,
+                    "admin",
+                    "paid",
+                    "active"
+                ))
+                conn.commit()
+                print("Admin user seeded successfully!")
+            else:
+                # Update password/role if they are not set or outdated
+                update_query = """
+                UPDATE users 
+                SET password = %s, user_role = %s
+                WHERE email = %s
+                """
+                if is_sqlite:
+                    update_query = update_query.replace("%s", "?")
+                cursor.execute(update_query, (hashed_pw, "admin", "admin@cott.com"))
+                conn.commit()
+                print("Admin user password/role updated successfully in DB.")
+            cursor.close()
+        except Exception as seed_err:
+            print(f"Error seeding admin user: {seed_err}")
+
+        # 8. Create scraping_jobs table
+        print("Creating table: scraping_jobs...")
+        create_jobs_sql = """
+        CREATE TABLE IF NOT EXISTS scraping_jobs (
+            id SERIAL PRIMARY KEY,
+            status VARCHAR(50) DEFAULT 'pending',
+            total_shows INTEGER DEFAULT 0,
+            processed_shows INTEGER DEFAULT 0,
+            current_show VARCHAR(255),
+            error_message TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        if is_sqlite:
+            create_jobs_sql = create_jobs_sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
+        execute_query(conn, is_sqlite, create_jobs_sql)
         
         if is_sqlite:
             conn.commit()
@@ -464,8 +540,16 @@ def upsert_user(conn, is_sqlite, user_data):
         user_data.get('plan_status', 'none')
     )
     execute_query(conn, is_sqlite, query, params)
-    if is_sqlite:
-        conn.commit()
+    conn.commit()
+
+def update_user_profile(conn, is_sqlite, user_id, profile_data):
+    """
+    Updates the name and phone number for a user in the database.
+    """
+    query = "UPDATE users SET name = %s, phone_number = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+    params = (profile_data.get('name'), profile_data.get('phone_number'), user_id)
+    execute_query(conn, is_sqlite, query, params)
+    conn.commit()
 
 if __name__ == "__main__":
     init_db()

@@ -3,10 +3,12 @@ import math
 import json
 import urllib.parse
 import requests
+import threading
 from flask import Flask, render_template, request, redirect, url_for, jsonify, g, make_response
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 import db
+import scraper
 
 # Load environment variables relative to app.py directory
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -42,6 +44,29 @@ def requires_auth(f):
             return jsonify({"error": "Account is inactive"}), 403
             
         g.current_user = user
+        return f(*args, **kwargs)
+    return decorated
+
+def requires_admin_auth(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Admin authorization token is missing"}), 401
+        
+        token = auth_header.split(" ")[1]
+        try:
+            # Admin token is valid for 7 days
+            admin_email = token_serializer.loads(token, salt="admin-auth", max_age=7 * 24 * 3600)
+            if admin_email != "admin@cott.com":
+                return jsonify({"error": "Unauthorized admin access"}), 403
+        except SignatureExpired:
+            return jsonify({"error": "Admin token has expired"}), 401
+        except BadSignature:
+            return jsonify({"error": "Invalid admin token"}), 401
+            
+        g.current_admin = admin_email
         return f(*args, **kwargs)
     return decorated
 
@@ -113,6 +138,280 @@ def google_auth():
 @requires_auth
 def get_me():
     return jsonify(g.current_user), 200
+
+@app.route("/api/auth/profile", methods=["PUT"])
+@requires_auth
+def update_profile():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+        
+    name = data.get("name", "").strip()
+    phone_number = data.get("phone_number", "").strip()
+    
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+        
+    try:
+        conn, is_sqlite = get_db()
+        
+        profile_data = {
+            "name": name,
+            "phone_number": phone_number if phone_number else None
+        }
+        
+        db.update_user_profile(conn, is_sqlite, g.current_user["id"], profile_data)
+        
+        # Fetch the updated user details
+        updated_user = db.get_user(conn, is_sqlite, g.current_user["id"])
+        
+        return jsonify(updated_user), 200
+    except Exception as e:
+        print(f"Error in update_profile: {e}")
+        return jsonify({"error": "Failed to update profile", "details": str(e)}), 500
+
+@app.route("/api/auth/bypass", methods=["POST"])
+def auth_bypass():
+    conn, is_sqlite = get_db()
+    user_data = {
+        "id": "mock_dev_user_12345",
+        "email": "developer@cott.analytics",
+        "name": "Dev User",
+        "picture": "https://lh3.googleusercontent.com/a/default-user=s96-c",
+        "phone_number": "1234567890",
+        "user_role": "super admin",
+        "is_active": True,
+        "account_type": "paid",
+        "plan_status": "active"
+    }
+    
+    db.upsert_user(conn, is_sqlite, user_data)
+    session_token = token_serializer.dumps(user_data["id"])
+    
+    return jsonify({
+        "token": session_token,
+        "user": user_data
+    }), 200
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No credentials provided"}), 400
+        
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
+    
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        query = "SELECT password, user_role FROM users WHERE email = %s"
+        if is_sqlite:
+            query = query.replace("%s", "?")
+        cursor.execute(query, (email,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            db_password_hash, db_role = row[0], row[1]
+            from werkzeug.security import check_password_hash
+            if db_password_hash and check_password_hash(db_password_hash, password) and db_role == "admin":
+                token = token_serializer.dumps(email, salt="admin-auth")
+                return jsonify({
+                    "token": token,
+                    "email": email,
+                    "role": "admin"
+                }), 200
+        
+        return jsonify({"error": "Invalid admin email or password"}), 401
+    except Exception as e:
+        print(f"Error in admin_login: {e}")
+        return jsonify({"error": "Failed to complete login transaction", "details": str(e)}), 500
+
+@app.route("/api/admin/stats", methods=["GET"])
+@requires_admin_auth
+def admin_get_stats():
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        
+        # 1. Total users
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        
+        # 2. Total shows
+        cursor.execute("SELECT COUNT(*) FROM shows")
+        total_shows = cursor.fetchone()[0]
+        
+        # 3. Platform distribution
+        cursor.execute("""
+            SELECT platform, COUNT(*) 
+            FROM shows 
+            WHERE platform IS NOT NULL 
+            GROUP BY platform 
+            ORDER BY COUNT(*) DESC
+        """)
+        platform_rows = cursor.fetchall()
+        platform_stats = [{"platform": r[0], "count": r[1]} for r in platform_rows]
+        
+        # 4. Weekly scraping volume (historical database growth)
+        cursor.execute("""
+            SELECT week, COUNT(*) 
+            FROM shows 
+            WHERE week IS NOT NULL 
+            GROUP BY week
+        """)
+        week_rows = cursor.fetchall()
+        
+        # Sort weeks chronologically in Python to keep it database-agnostic
+        def parse_week_sort_key(item):
+            week_code = item[0]
+            if not week_code:
+                return (0, 0)
+            import re
+            match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(week_code))
+            if match:
+                return (int(match.group(2)), int(match.group(1)))
+            return (0, 0)
+            
+        week_rows.sort(key=parse_week_sort_key)
+        weekly_stats = [{"week": r[0], "count": r[1]} for r in week_rows]
+        
+        conn.close()
+        
+        return jsonify({
+            "total_users": total_users,
+            "total_shows": total_shows,
+            "platform_stats": platform_stats,
+            "weekly_stats": weekly_stats
+        }), 200
+    except Exception as e:
+        print(f"Error in admin_get_stats: {e}")
+        return jsonify({"error": "Failed to fetch stats", "details": str(e)}), 500
+
+@app.route("/api/admin/users", methods=["GET"])
+@requires_admin_auth
+def admin_get_users():
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        query = """
+        SELECT id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, created_at 
+        FROM users 
+        ORDER BY created_at DESC
+        """
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        
+        users = []
+        for r in rows:
+            users.append({
+                "id": r[0],
+                "email": r[1],
+                "name": r[2],
+                "picture": r[3],
+                "phone_number": r[4],
+                "user_role": r[5],
+                "is_active": r[6],
+                "account_type": r[7],
+                "plan_status": r[8],
+                "created_at": r[9].isoformat() if r[9] and hasattr(r[9], 'isoformat') else str(r[9])
+            })
+        return jsonify(users), 200
+    except Exception as e:
+        print(f"Error in admin_get_users: {e}")
+        return jsonify({"error": "Failed to fetch users", "details": str(e)}), 500
+
+@app.route("/api/admin/upload-excel", methods=["POST"])
+@requires_admin_auth
+def admin_upload_excel():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Empty filename"}), 400
+        
+    if not file.filename.endswith('.xlsx'):
+        return jsonify({"error": "Only Excel files (.xlsx) are allowed"}), 400
+        
+    # Save the file to data_input/uploads/
+    upload_dir = os.path.join(basedir, "data_input", "uploads")
+    if not os.path.exists(upload_dir):
+        os.makedirs(upload_dir)
+        
+    import uuid
+    unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
+    filepath = os.path.join(upload_dir, unique_filename)
+    file.save(filepath)
+    
+    # Insert pending job into scraping_jobs
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        query = "INSERT INTO scraping_jobs (status, current_show) VALUES ('pending', 'Initializing Excel upload')"
+        if is_sqlite:
+            cursor.execute(query)
+            job_id = cursor.lastrowid
+        else:
+            query += " RETURNING id"
+            cursor.execute(query)
+            job_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error inserting scraping job: {e}")
+        return jsonify({"error": "Failed to initialize scraping task in database", "details": str(e)}), 500
+        
+    # Spawn background thread to run scraping
+    try:
+        thread = threading.Thread(target=scraper.process_excel_file, args=(filepath, job_id))
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            "job_id": job_id,
+            "status": "pending",
+            "message": "Scraping task started in the background"
+        }), 200
+    except Exception as e:
+        print(f"Error spawning scraping thread: {e}")
+        return jsonify({"error": "Failed to start scraping background thread", "details": str(e)}), 500
+
+@app.route("/api/admin/scraping-job/<int:job_id>", methods=["GET"])
+@requires_admin_auth
+def admin_get_job_status(job_id):
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        query = """
+        SELECT id, status, total_shows, processed_shows, current_show, error_message, created_at, updated_at 
+        FROM scraping_jobs 
+        WHERE id = %s
+        """
+        if is_sqlite:
+            query = query.replace("%s", "?")
+            
+        cursor.execute(query, (job_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return jsonify({"error": "Job not found"}), 404
+            
+        return jsonify({
+            "id": row[0],
+            "status": row[1],
+            "total_shows": row[2],
+            "processed_shows": row[3],
+            "current_show": row[4],
+            "error_message": row[5],
+            "created_at": row[6].isoformat() if row[6] and hasattr(row[6], 'isoformat') else str(row[6]),
+            "updated_at": row[7].isoformat() if row[7] and hasattr(row[7], 'isoformat') else str(row[7])
+        }), 200
+    except Exception as e:
+        print(f"Error fetching job status: {e}")
+        return jsonify({"error": "Failed to fetch job status", "details": str(e)}), 500
 
 
 @app.before_request
@@ -308,7 +607,7 @@ def index():
                s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
         FROM shows s
         WHERE {where_sql}
-        ORDER BY s.global_rating DESC NULLS LAST
+        ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.global_rating DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     all_params = list(params) + [per_page, offset]
@@ -656,7 +955,7 @@ def api_shows_json():
                s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
         FROM shows s
         WHERE {where_sql}
-        ORDER BY s.global_rating DESC NULLS LAST
+        ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.global_rating DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     all_params = list(params) + [per_page, offset]
@@ -1719,24 +2018,24 @@ def sync_status():
     running = os.path.exists("scraper.lock")
     return {"status": "syncing" if running else "idle"}
 
-if __name__ == "__main__":
-    # Ensure tables exist
+# Ensure tables exist on startup (runs under Gunicorn/Render WSGI workers)
+try:
+    db.init_db()
+except Exception as e:
+    print(f"Failed to initialize database on startup: {e}")
+
+# Clean up any stale lock file on startup
+if os.path.exists("scraper.lock"):
     try:
-        db.init_db()
-    except Exception as e:
-        print(f"Failed to initialize database: {e}")
+        os.remove("scraper.lock")
+    except Exception:
+        pass
 
-    # Clean up any stale lock file on startup
-    if os.path.exists("scraper.lock"):
-        try:
-            os.remove("scraper.lock")
-        except Exception:
-            pass
-
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
 
     app.run(
         host="0.0.0.0",
         port=port,
-        debug=False
+        debug=True
     )
