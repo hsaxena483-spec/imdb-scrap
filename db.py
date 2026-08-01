@@ -113,10 +113,20 @@ def init_db():
             reach NUMERIC(10, 5),
             week VARCHAR(50),
             market VARCHAR(50),
+            play_url VARCHAR(500),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        
+        # Alter table to add play_url column if database already exists
+        try:
+            execute_query(conn, is_sqlite, "ALTER TABLE shows ADD COLUMN play_url VARCHAR(500)")
+            conn.commit()
+            print("Successfully added play_url column to shows table")
+        except Exception as alter_err:
+            # Ignored if column already exists
+            print(f"play_url column not added (may already exist): {alter_err}")
         
         # 2. Create show_genres table
         print("Creating table: show_genres...")
@@ -220,6 +230,7 @@ def init_db():
         try:
             from werkzeug.security import generate_password_hash
             hashed_pw = generate_password_hash("cott@123")
+            hashed_super_pw = generate_password_hash("Supercott@123")
             
             # Check if admin@cott.com exists
             cursor = conn.cursor()
@@ -260,9 +271,46 @@ def init_db():
                 cursor.execute(update_query, (hashed_pw, "admin", "admin@cott.com"))
                 conn.commit()
                 print("Admin user password/role updated successfully in DB.")
+            
+            # Seed the superadmin user if not exists
+            cursor.execute(query, ("superadmin@cott.com",))
+            superadmin_exists = cursor.fetchone()[0] > 0
+            
+            if not superadmin_exists:
+                print("Seeding superadmin user into database...")
+                insert_query = """
+                INSERT INTO users (id, email, name, password, user_role, account_type, plan_status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """
+                if is_sqlite:
+                    insert_query = insert_query.replace("%s", "?")
+                cursor.execute(insert_query, (
+                    "superadmin-cott",
+                    "superadmin@cott.com",
+                    "Super Admin",
+                    hashed_super_pw,
+                    "superadmin",
+                    "paid",
+                    "active"
+                ))
+                conn.commit()
+                print("Superadmin user seeded successfully!")
+            else:
+                # Update password/role if they are not set or outdated
+                update_query = """
+                UPDATE users 
+                SET password = %s, user_role = %s
+                WHERE email = %s
+                """
+                if is_sqlite:
+                    update_query = update_query.replace("%s", "?")
+                cursor.execute(update_query, (hashed_super_pw, "superadmin", "superadmin@cott.com"))
+                conn.commit()
+                print("Superadmin user password/role updated successfully in DB.")
+                
             cursor.close()
         except Exception as seed_err:
-            print(f"Error seeding admin user: {seed_err}")
+            print(f"Error seeding admin/superadmin user: {seed_err}")
 
         # 8. Create scraping_jobs table
         print("Creating table: scraping_jobs...")
@@ -550,6 +598,26 @@ def update_user_profile(conn, is_sqlite, user_id, profile_data):
     params = (profile_data.get('name'), profile_data.get('phone_number'), user_id)
     execute_query(conn, is_sqlite, query, params)
     conn.commit()
+
+def get_db():
+    from flask import has_app_context, g
+    if has_app_context():
+        if 'db' not in g:
+            g.db, g.is_sqlite = get_connection()
+        return g.db, g.is_sqlite
+    else:
+        return get_connection()
+
+def get_db_data(query, params=None):
+    conn, is_sqlite = get_db()
+    cursor = execute_query(conn, is_sqlite, query, params)
+    rows = cursor.fetchall()
+    columns = [description[0] for description in cursor.description]
+    from flask import has_app_context
+    if not has_app_context():
+        cursor.close()
+        conn.close()
+    return rows, columns
 
 if __name__ == "__main__":
     init_db()
