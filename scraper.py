@@ -49,7 +49,27 @@ def init_driver():
     # Suppress unnecessary messages
     options.add_experimental_option('excludeSwitches', ['enable-logging'])
     
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    # Detect Chrome binary path (useful for Linux containers and Render)
+    chrome_bin = os.getenv("CHROME_BIN")
+    if chrome_bin:
+        options.binary_location = chrome_bin
+    elif os.path.exists("/usr/bin/google-chrome-stable"):
+        options.binary_location = "/usr/bin/google-chrome-stable"
+    elif os.path.exists("/usr/bin/google-chrome"):
+        options.binary_location = "/usr/bin/google-chrome"
+        
+    try:
+        # In modern Selenium (>= 4.6.0), Selenium Manager automatically downloads/locates Chrome & chromedriver.
+        # This is the cleanest way and works out-of-the-box when Chrome is installed on the system path.
+        driver = webdriver.Chrome(options=options)
+    except Exception as e:
+        print(f"Direct Chrome initialization failed ({e}). Falling back to ChromeDriverManager...")
+        try:
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+        except Exception as fallback_err:
+            print(f"Fallback to ChromeDriverManager also failed: {fallback_err}")
+            raise fallback_err
+            
     return driver
 
 def get_next_data(driver, url):
