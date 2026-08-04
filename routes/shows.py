@@ -6,6 +6,40 @@ from config import normalize_genre
 
 shows_bp = Blueprint('shows', __name__)
 
+def compute_word_cloud(reviews):
+    """
+    Computes word frequency counts for a list of reviews to create a word cloud.
+    """
+    word_counts = {}
+    stopwords = {
+        "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be", "been", "being",
+        "to", "of", "in", "on", "at", "by", "for", "with", "about", "against", "between", "into",
+        "through", "during", "before", "after", "above", "below", "up", "down", "from", "further",
+        "here", "there", "when", "where", "why", "how", "all", "any", "both", "each", "few", "more",
+        "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than",
+        "too", "very", "can", "will", "just", "don", "should", "now", "i", "me", "my",
+        "myself", "we", "our", "ours", "ourselves", "you", "your", "yours", "yourself", "yourselves",
+        "he", "him", "his", "himself", "she", "her", "hers", "herself", "it", "its", "itself", "they",
+        "them", "their", "theirs", "themselves", "this", "that", "these", "those", "am", "has", "have",
+        "had", "having", "do", "does", "did", "doing", "would", "could", "should", "also",
+        "get", "got", "show", "shows", "episode", "episodes", "season", "seasons", "series", "watch",
+        "watching", "watched", "really", "much", "many", "good", "great", "best", "like", "one", "think",
+        "about", "would", "make", "made", "even", "time", "people", "character", "characters", "story",
+        "plot", "scene", "scenes", "director", "actor", "actors", "acting", "performance"
+    }
+    
+    for r in reviews:
+        summary = r.get('summary', '') or ''
+        content = r.get('content', '') or ''
+        text = (summary + ' ' + content).lower()
+        words = re.findall(r'\b[a-z]{3,15}\b', text)
+        for w in words:
+            if w not in stopwords:
+                word_counts[w] = word_counts.get(w, 0) + 1
+                
+    sorted_words = sorted(word_counts.items(), key=lambda x: x[1], reverse=True)[:50]
+    return [{"text": word, "value": count} for word, count in sorted_words]
+
 @shows_bp.route("/")
 def index():
     page = request.args.get('page', 1, type=int)
@@ -346,7 +380,8 @@ def show_detail(show_id):
             'reach': round(float(r[2]), 2) if r[2] is not None else 0.0
         })
         
-    return render_template("show.html", show=show, country_ratings=country_ratings, reviews=reviews, weekly_history=weekly_history)
+    word_cloud = compute_word_cloud(reviews)
+    return render_template("show.html", show=show, country_ratings=country_ratings, reviews=reviews, weekly_history=weekly_history, word_cloud=word_cloud)
 
 @shows_bp.route("/api/shows")
 def api_shows_json():
@@ -658,11 +693,13 @@ def api_show_detail_json(show_id):
             'reach': round(float(r[2]), 2) if r[2] is not None else 0.0
         })
         
+    word_cloud = compute_word_cloud(reviews)
     return jsonify({
         'show': show,
         'country_ratings': country_ratings,
         'reviews': reviews,
-        'weekly_history': weekly_history
+        'weekly_history': weekly_history,
+        'word_cloud': word_cloud
     })
 
 @shows_bp.route("/api/filters")

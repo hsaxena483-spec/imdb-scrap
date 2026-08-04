@@ -46,8 +46,12 @@ def init_driver():
     }
     options.add_experimental_option("prefs", prefs)
     
-    # Suppress unnecessary messages
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
+    # Suppress unnecessary messages and disable automation indicators
+    options.add_experimental_option('excludeSwitches', ['enable-logging', 'enable-automation'])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # Anti-bot bypass (removes navigator.webdriver indicator)
+    options.add_argument("--disable-blink-features=AutomationControlled")
     
     # Detect Chrome binary path (useful for Linux containers and Render)
     chrome_bin = os.getenv("CHROME_BIN")

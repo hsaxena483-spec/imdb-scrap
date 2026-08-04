@@ -13,7 +13,7 @@ def normalize_genre(genre_name):
     if not genre_name:
         return ""
     g = genre_name.strip().lower()
-    if g in ["reality-tv", "reality tv", "reality_tv"]:
+    if g in ["reality", "reality-tv", "reality tv", "reality_tv", "reality show", "reality-show"]:
         return "Reality TV"
     if g in ["sci-fi", "scifi", "science fiction"]:
         return "Sci-Fi"

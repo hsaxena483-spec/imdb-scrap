@@ -34,6 +34,9 @@ def normalize_platform(name):
         "amazon prime video": "Amazon Prime Video",
         "prime video": "Amazon Prime Video",
         "disney+ hotstar": "Disney+ Hotstar",
+        "disney+hotstar": "Disney+ Hotstar",
+        "disney hotstar": "Disney+ Hotstar",
+        "hotstar": "Disney+ Hotstar",
         "disney+": "Disney+",
         "aha": "Aha",
         "sun nxt": "Sun NXT",
@@ -73,6 +76,10 @@ def normalize_content_type(val):
         return "Show"
     if v in ["movie", "movies"]:
         return "Movie"
+    if v in ["sport", "sports"]:
+        return "Sports"
+    if v in ["tv catchup", "tv-catchup", "tvcatchup"]:
+        return "TV Catchup"
     return str(val).strip().title()
 
 def normalize_market(val):
