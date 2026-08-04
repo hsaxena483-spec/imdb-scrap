@@ -908,11 +908,11 @@ def main():
                             excel_show.get('current_rank'),
                             excel_show.get('reach'),
                             week_code,
-                            excel_show.get('platform'),
-                            excel_show.get('content_format'),
-                            excel_show.get('paid_free'),
-                            excel_show.get('content_type'),
-                            excel_show.get('market'),
+                            db.normalize_platform(excel_show.get('platform')) if excel_show.get('platform') else None,
+                            db.normalize_content_format(excel_show.get('content_format')) if excel_show.get('content_format') else None,
+                            db.normalize_paid_free(excel_show.get('paid_free')) if excel_show.get('paid_free') else None,
+                            db.normalize_content_type(excel_show.get('content_type')) if excel_show.get('content_type') else None,
+                            db.normalize_market(excel_show.get('market')) if excel_show.get('market') else "ALL INDIA",
                             show_id
                         ))
                         conn.commit()
@@ -1269,11 +1269,11 @@ def process_excel_file(filepath, job_id=None):
                 excel_show.get('current_rank'),
                 excel_show.get('reach'),
                 show_week,
-                excel_show.get('platform'),
-                excel_show.get('content_format'),
-                excel_show.get('paid_free'),
-                excel_show.get('content_type'),
-                excel_show.get('market'),
+                db.normalize_platform(excel_show.get('platform')) if excel_show.get('platform') else None,
+                db.normalize_content_format(excel_show.get('content_format')) if excel_show.get('content_format') else None,
+                db.normalize_paid_free(excel_show.get('paid_free')) if excel_show.get('paid_free') else None,
+                db.normalize_content_type(excel_show.get('content_type')) if excel_show.get('content_type') else None,
+                db.normalize_market(excel_show.get('market')) if excel_show.get('market') else "ALL INDIA",
                 excel_show.get('total_time_spent'),
                 show_id
             ))

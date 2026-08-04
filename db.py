@@ -44,6 +44,9 @@ def normalize_platform(name):
         "altbalaji": "AltBalaji",
         "mx player": "MX Player",
         "mxplayer": "MX Player",
+        "amazon mx player": "Amazon MX Player",
+        "amazon mxplayer": "Amazon MX Player",
+        "apple tv": "Apple TV",
         "eros now": "Eros Now",
         "erosnow": "Eros Now",
         "youtube": "YouTube"
