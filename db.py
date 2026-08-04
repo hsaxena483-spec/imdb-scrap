@@ -15,6 +15,86 @@ DB_NAME = os.getenv("DB_NAME", "imdb_db")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
+def normalize_platform(name):
+    if not name:
+        return ""
+    p = str(name).strip().lower()
+    mapping = {
+        "zee5": "ZEE5",
+        "sonyliv": "SonyLIV",
+        "sony liv": "SonyLIV",
+        "jiohotstar": "JioHotstar",
+        "jio hotstar": "JioHotstar",
+        "netflix": "Netflix",
+        "hoichoi": "Hoichoi",
+        "lionsgate play": "Lionsgate Play",
+        "manorama max": "Manorama Max",
+        "shemaroo me": "Shemaroo Me",
+        "shemaroome": "Shemaroo Me",
+        "amazon prime video": "Amazon Prime Video",
+        "prime video": "Amazon Prime Video",
+        "disney+ hotstar": "Disney+ Hotstar",
+        "disney+": "Disney+",
+        "aha": "Aha",
+        "sun nxt": "Sun NXT",
+        "sunnxt": "Sun NXT",
+        "altbalaji": "AltBalaji",
+        "mx player": "MX Player",
+        "mxplayer": "MX Player",
+        "eros now": "Eros Now",
+        "erosnow": "Eros Now",
+        "youtube": "YouTube"
+    }
+    return mapping.get(p, str(name).strip().title())
+
+def normalize_paid_free(val):
+    if not val:
+        return ""
+    v = str(val).strip().lower()
+    if "free" in v:
+        return "Free"
+    if "paid" in v:
+        return "Paid"
+    return str(val).strip().title()
+
+def normalize_content_format(val):
+    if not val:
+        return ""
+    v = str(val).strip().lower()
+    if "shows/live content" in v or "shows/live" in v or "show/live" in v:
+        return "Shows/Live Content"
+    return str(val).strip().title()
+
+def normalize_content_type(val):
+    if not val:
+        return ""
+    v = str(val).strip().lower()
+    if v in ["show", "shows"]:
+        return "Show"
+    if v in ["movie", "movies"]:
+        return "Movie"
+    return str(val).strip().title()
+
+def normalize_market(val):
+    if not val:
+        return "ALL INDIA"
+    v = str(val).strip().upper()
+    if v in ["ALL INDIA", "ALL-INDIA", "INDIA"]:
+        return "ALL INDIA"
+    return str(val).strip().upper()
+
+def normalize_languages(val):
+    if not val:
+        return ""
+    langs = [l.strip().title() for l in str(val).split(",") if l.strip()]
+    cleaned = []
+    for l in langs:
+        if l.lower() == "english":
+            cleaned.append("English")
+        else:
+            cleaned.append(l)
+    return ", ".join(cleaned)
+
 def get_connection():
     """
     Attempts to connect to PostgreSQL. If configured to use SQLite,
@@ -114,6 +194,7 @@ def init_db():
             week VARCHAR(50),
             market VARCHAR(50),
             play_url VARCHAR(500),
+            total_time_spent NUMERIC(15, 5),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -127,6 +208,15 @@ def init_db():
         except Exception as alter_err:
             # Ignored if column already exists
             print(f"play_url column not added (may already exist): {alter_err}")
+
+        # Alter table to add total_time_spent column if database already exists
+        try:
+            execute_query(conn, is_sqlite, "ALTER TABLE shows ADD COLUMN total_time_spent NUMERIC(15, 5)")
+            conn.commit()
+            print("Successfully added total_time_spent column to shows table")
+        except Exception as alter_err:
+            # Ignored if column already exists
+            print(f"total_time_spent column not added (may already exist): {alter_err}")
         
         # 2. Create show_genres table
         print("Creating table: show_genres...")
@@ -194,9 +284,19 @@ def init_db():
             paid_free VARCHAR(20),
             content_type VARCHAR(50),
             market VARCHAR(50),
+            total_time_spent NUMERIC(15, 5),
             PRIMARY KEY (show_id, week)
         );
         """)
+
+        # Alter table to add total_time_spent column if database already exists
+        try:
+            execute_query(conn, is_sqlite, "ALTER TABLE show_weekly_rankings ADD COLUMN total_time_spent NUMERIC(15, 5)")
+            conn.commit()
+            print("Successfully added total_time_spent column to show_weekly_rankings table")
+        except Exception as alter_err:
+            # Ignored if column already exists
+            print(f"total_time_spent column not added to show_weekly_rankings (may already exist): {alter_err}")
 
         # 7. Create users table
         print("Creating table: users...")
@@ -327,18 +427,197 @@ def init_db():
         );
         """
         if is_sqlite:
-            create_jobs_sql = create_jobs_sql.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
-        execute_query(conn, is_sqlite, create_jobs_sql)
-        
-        if is_sqlite:
             conn.commit()
             
         print("Database initialized successfully.")
+        
+        # Run cleanup and standardization
+        try:
+            cleanup_and_standardize_data(conn, is_sqlite)
+        except Exception as clean_err:
+            print(f"Error standardizing data on startup: {clean_err}")
+            
     except Exception as e:
         print(f"Error initializing database: {e}")
         raise e
     finally:
         conn.close()
+
+def cleanup_and_standardize_data(conn, is_sqlite):
+    """
+    Standardizes existing records in the shows, show_genres, and platform_gender tables,
+    converting platforms, languages, formats, paid/free tags, content types,
+    and genres to a single normalized casing style to eliminate duplicates.
+    """
+    cursor = conn.cursor()
+    
+    # 1. Standardize shows table columns
+    cursor.execute("SELECT id, platform, content_format, paid_free, content_type, languages, market FROM shows")
+    rows = cursor.fetchall()
+    
+    updates = []
+    for r in rows:
+        show_id, platform, content_format, paid_free, content_type, languages, market = r
+        
+        clean_platform = normalize_platform(platform) if platform else None
+        clean_format = normalize_content_format(content_format) if content_format else None
+        clean_paid_free = normalize_paid_free(paid_free) if paid_free else None
+        clean_content_type = normalize_content_type(content_type) if content_type else None
+        clean_languages = normalize_languages(languages) if languages else None
+        clean_market = normalize_market(market) if market else "ALL INDIA"
+        
+        if (clean_platform != platform or 
+            clean_format != content_format or 
+            clean_paid_free != paid_free or 
+            clean_content_type != content_type or 
+            clean_languages != languages or 
+            clean_market != market):
+            
+            updates.append((clean_platform, clean_format, clean_paid_free, clean_content_type, clean_languages, clean_market, show_id))
+            
+    if updates:
+        print(f"Cleaning up {len(updates)} shows records with legacy casings...")
+        update_query = """
+        UPDATE shows SET 
+            platform = %s, 
+            content_format = %s, 
+            paid_free = %s, 
+            content_type = %s, 
+            languages = %s, 
+            market = %s 
+        WHERE id = %s
+        """
+        if is_sqlite:
+            update_query = update_query.replace("%s", "?")
+            
+        for u in updates:
+            cursor.execute(update_query, u)
+        conn.commit()
+        
+    # 2. Standardize show_genres table
+    cursor.execute("SELECT show_id, genre FROM show_genres")
+    genre_rows = cursor.fetchall()
+    
+    genre_updates = []
+    genres_to_delete = []
+    seen = set()
+    
+    from config import normalize_genre
+    for show_id, genre in genre_rows:
+        clean_genre = normalize_genre(genre)
+        if clean_genre in ['Sport', 'Sports']:
+            genres_to_delete.append((show_id, genre))
+            continue
+            
+        key = (show_id, clean_genre)
+        if key in seen:
+            genres_to_delete.append((show_id, genre))
+        else:
+            seen.add(key)
+            if clean_genre != genre:
+                genre_updates.append((clean_genre, show_id, genre))
+                
+    if genres_to_delete:
+        print(f"Deleting {len(genres_to_delete)} duplicate/invalid genre entries...")
+        delete_query = "DELETE FROM show_genres WHERE show_id = %s AND genre = %s"
+        if is_sqlite:
+            delete_query = delete_query.replace("%s", "?")
+        for d in genres_to_delete:
+            cursor.execute(delete_query, d)
+        conn.commit()
+        
+    if genre_updates:
+        print(f"Standardizing {len(genre_updates)} genre labels in the database...")
+        update_genre_query = "UPDATE show_genres SET genre = %s WHERE show_id = %s AND genre = %s"
+        if is_sqlite:
+            update_genre_query = update_genre_query.replace("%s", "?")
+        for g in genre_updates:
+            try:
+                cursor.execute(update_genre_query, g)
+            except Exception as e:
+                print(f"Error standardizing genre: {e}. Deleting duplicate.")
+                fallback_delete = "DELETE FROM show_genres WHERE show_id = %s AND genre = %s"
+                if is_sqlite:
+                    fallback_delete = fallback_delete.replace("%s", "?")
+                cursor.execute(fallback_delete, (g[1], g[2]))
+        conn.commit()
+
+    # 3. Standardize platform_gender table
+    cursor.execute("SELECT platform, total_reach, male_pct, female_pct FROM platform_gender")
+    pg_rows = cursor.fetchall()
+    
+    pg_groups = {}
+    for platform, total_reach, male_pct, female_pct in pg_rows:
+        norm_p = normalize_platform(platform)
+        if norm_p not in pg_groups:
+            pg_groups[norm_p] = []
+        pg_groups[norm_p].append({
+            'original': platform,
+            'reach': float(total_reach) if total_reach else 0.0,
+            'male': float(male_pct) if male_pct else 0.0,
+            'female': float(female_pct) if female_pct else 0.0
+        })
+        
+    for norm_p, items in pg_groups.items():
+        if len(items) > 1 or items[0]['original'] != norm_p:
+            avg_reach = max(i['reach'] for i in items)
+            avg_male = sum(i['male'] for i in items) / len(items)
+            avg_female = sum(i['female'] for i in items) / len(items)
+            
+            delete_pg = "DELETE FROM platform_gender WHERE platform = %s"
+            if is_sqlite:
+                delete_pg = delete_pg.replace("%s", "?")
+            for i in items:
+                cursor.execute(delete_pg, (i['original'],))
+            conn.commit()
+            
+            insert_pg = "INSERT INTO platform_gender (platform, total_reach, male_pct, female_pct) VALUES (%s, %s, %s, %s)"
+            if is_sqlite:
+                insert_pg = insert_pg.replace("%s", "?")
+            cursor.execute(insert_pg, (norm_p, avg_reach, avg_male, avg_female))
+            conn.commit()
+
+    # 4. Standardize show_weekly_rankings table
+    cursor.execute("SELECT show_id, week, platform, content_format, paid_free, content_type, market FROM show_weekly_rankings")
+    ranking_rows = cursor.fetchall()
+    
+    ranking_updates = []
+    for r in ranking_rows:
+        show_id, week, platform, content_format, paid_free, content_type, market = r
+        
+        clean_platform = normalize_platform(platform) if platform else None
+        clean_format = normalize_content_format(content_format) if content_format else None
+        clean_paid_free = normalize_paid_free(paid_free) if paid_free else None
+        clean_content_type = normalize_content_type(content_type) if content_type else None
+        clean_market = normalize_market(market) if market else "ALL INDIA"
+        
+        if (clean_platform != platform or 
+            clean_format != content_format or 
+            clean_paid_free != paid_free or 
+            clean_content_type != content_type or 
+            clean_market != market):
+            
+            ranking_updates.append((clean_platform, clean_format, clean_paid_free, clean_content_type, clean_market, show_id, week))
+            
+    if ranking_updates:
+        print(f"Cleaning up {len(ranking_updates)} show_weekly_rankings records with legacy casings...")
+        update_ranking_query = """
+        UPDATE show_weekly_rankings SET 
+            platform = %s, 
+            content_format = %s, 
+            paid_free = %s, 
+            content_type = %s, 
+            market = %s 
+        WHERE show_id = %s AND week = %s
+        """
+        if is_sqlite:
+            update_ranking_query = update_ranking_query.replace("%s", "?")
+            
+        for u in ranking_updates:
+            cursor.execute(update_ranking_query, u)
+        conn.commit()
+
+    cursor.close()
 
 def save_show(conn, is_sqlite, show_data):
     """
@@ -349,9 +628,9 @@ def save_show(conn, is_sqlite, show_data):
         id, title, type, release_year, end_year, global_rating, global_vote_count,
         runtime_seconds, certificate, plot, poster_url, release_date, total_episodes,
         creators, stars, current_rank, platform, content_format, paid_free,
-        content_type, languages, reach, week, market, updated_at
+        content_type, languages, reach, week, market, total_time_spent, updated_at
     ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
     ) ON CONFLICT (id) DO UPDATE SET
         title = EXCLUDED.title,
         type = EXCLUDED.type,
@@ -376,6 +655,7 @@ def save_show(conn, is_sqlite, show_data):
         reach = EXCLUDED.reach,
         week = EXCLUDED.week,
         market = EXCLUDED.market,
+        total_time_spent = EXCLUDED.total_time_spent,
         updated_at = CURRENT_TIMESTAMP;
     """
     params = (
@@ -395,14 +675,15 @@ def save_show(conn, is_sqlite, show_data):
         show_data.get('creators'),
         show_data.get('stars'),
         show_data.get('current_rank'),
-        show_data.get('platform'),
-        show_data.get('content_format'),
-        show_data.get('paid_free'),
-        show_data.get('content_type'),
-        show_data.get('languages'),
+        normalize_platform(show_data.get('platform')) if show_data.get('platform') else None,
+        normalize_content_format(show_data.get('content_format')) if show_data.get('content_format') else None,
+        normalize_paid_free(show_data.get('paid_free')) if show_data.get('paid_free') else None,
+        normalize_content_type(show_data.get('content_type')) if show_data.get('content_type') else None,
+        normalize_languages(show_data.get('languages')) if show_data.get('languages') else None,
         show_data.get('reach'),
         show_data.get('week'),
-        show_data.get('market')
+        normalize_market(show_data.get('market')) if show_data.get('market') else "ALL INDIA",
+        show_data.get('total_time_spent')
     )
     execute_query(conn, is_sqlite, query, params)
 
@@ -415,9 +696,12 @@ def save_genres(conn, is_sqlite, show_id, genres):
     VALUES (%s, %s)
     ON CONFLICT (show_id, genre) DO NOTHING;
     """
+    from config import normalize_genre
     for genre in genres:
         if genre:
-            execute_query(conn, is_sqlite, query, (show_id, genre))
+            clean_genre = normalize_genre(genre)
+            if clean_genre and clean_genre not in ['Sport', 'Sports']:
+                execute_query(conn, is_sqlite, query, (show_id, clean_genre))
 
 def save_country_ratings(conn, is_sqlite, show_id, country_ratings):
     """
@@ -521,9 +805,9 @@ def save_weekly_ranking(conn, is_sqlite, ranking_data):
     """
     query = """
     INSERT INTO show_weekly_rankings (
-        show_id, week, current_rank, reach, platform, content_format, paid_free, content_type, market
+        show_id, week, current_rank, reach, platform, content_format, paid_free, content_type, market, total_time_spent
     ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
     ) ON CONFLICT (show_id, week) DO UPDATE SET
         current_rank = EXCLUDED.current_rank,
         reach = EXCLUDED.reach,
@@ -531,18 +815,20 @@ def save_weekly_ranking(conn, is_sqlite, ranking_data):
         content_format = EXCLUDED.content_format,
         paid_free = EXCLUDED.paid_free,
         content_type = EXCLUDED.content_type,
-        market = EXCLUDED.market;
+        market = EXCLUDED.market,
+        total_time_spent = EXCLUDED.total_time_spent;
     """
     params = (
         ranking_data.get('show_id'),
         ranking_data.get('week'),
         ranking_data.get('current_rank'),
         ranking_data.get('reach'),
-        ranking_data.get('platform'),
-        ranking_data.get('content_format'),
-        ranking_data.get('paid_free'),
-        ranking_data.get('content_type'),
-        ranking_data.get('market')
+        normalize_platform(ranking_data.get('platform')) if ranking_data.get('platform') else None,
+        normalize_content_format(ranking_data.get('content_format')) if ranking_data.get('content_format') else None,
+        normalize_paid_free(ranking_data.get('paid_free')) if ranking_data.get('paid_free') else None,
+        normalize_content_type(ranking_data.get('content_type')) if ranking_data.get('content_type') else None,
+        normalize_market(ranking_data.get('market')) if ranking_data.get('market') else "ALL INDIA",
+        ranking_data.get('total_time_spent')
     )
     execute_query(conn, is_sqlite, query, params)
 

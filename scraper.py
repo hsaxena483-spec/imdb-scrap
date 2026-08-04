@@ -407,6 +407,55 @@ def read_excel_shows(filepath):
         except Exception as e:
             print(f"Warning: Could not save metadata.json: {e}")
             
+    col_map = {
+        'week': 1,
+        'market': 2,
+        'platform': 3,
+        'content_format': 4,
+        'paid_free': 5,
+        'content_type': 6,
+        'title': 7,
+        'language': 8,
+        'genre': 9,
+        'release_date': 10,
+        'current_rank': 11,
+        'reach': 12,
+        'total_time_spent': None
+    }
+    
+    # Try dynamically mapping columns based on row 6 headers
+    for col in range(1, ws.max_column + 1):
+        header_val = ws.cell(row=6, column=col).value
+        if not header_val:
+            continue
+        h_str = str(header_val).strip().lower()
+        if "week" in h_str:
+            col_map['week'] = col
+        elif "market" in h_str:
+            col_map['market'] = col
+        elif "platform" in h_str:
+            col_map['platform'] = col
+        elif "content format" in h_str:
+            col_map['content_format'] = col
+        elif "paid/free" in h_str or "paid_free" in h_str:
+            col_map['paid_free'] = col
+        elif "content type" in h_str:
+            col_map['content_type'] = col
+        elif "shows/live content" in h_str or h_str == "shows" or h_str == "title":
+            col_map['title'] = col
+        elif "language" in h_str:
+            col_map['language'] = col
+        elif "genre" in h_str:
+            col_map['genre'] = col
+        elif "release date" in h_str:
+            col_map['release_date'] = col
+        elif "rank" in h_str:
+            col_map['current_rank'] = col
+        elif "reach" in h_str:
+            col_map['reach'] = col
+        elif "time spent" in h_str or "total time spent" in h_str:
+            col_map['total_time_spent'] = col
+
     shows = []
     # Data rows start at row 7
     for row in range(7, ws.max_row + 1):
@@ -416,7 +465,7 @@ def read_excel_shows(filepath):
             if val_col1 in ["PLATFORM", "JIOHOTSTAR", "AMAZON PRIME VIDEO", "NETFLIX", "DISNEY+", "ZEE5", "SONYLIV"]:
                 break
 
-        title = ws.cell(row=row, column=7).value  # Shows/Live Content
+        title = ws.cell(row=row, column=col_map['title']).value  # Shows/Live Content
         if not title:
             continue
             
@@ -424,7 +473,7 @@ def read_excel_shows(filepath):
         if title_str.lower() in ["shows/live content", "shows", "title", "shows/live content "]:
             continue
         
-        release_date = ws.cell(row=row, column=10).value
+        release_date = ws.cell(row=row, column=col_map['release_date']).value
         if release_date and hasattr(release_date, 'strftime'):
             release_date = release_date.strftime('%Y-%m-%d')
         else:
@@ -432,22 +481,32 @@ def read_excel_shows(filepath):
             
         release_date = validate_date(release_date)
         
-        genres_str = ws.cell(row=row, column=9).value or ""
+        genres_str = ws.cell(row=row, column=col_map['genre']).value or ""
         genres = [g.strip() for g in genres_str.split(',') if g.strip()]
+        
+        total_time_spent = None
+        if col_map['total_time_spent']:
+            spent_val = ws.cell(row=row, column=col_map['total_time_spent']).value
+            if spent_val is not None:
+                try:
+                    total_time_spent = float(spent_val)
+                except (ValueError, TypeError):
+                    pass
         
         show = {
             'title': str(title).strip(),
-            'week': ws.cell(row=row, column=1).value,
-            'market': ws.cell(row=row, column=2).value,
-            'platform': ws.cell(row=row, column=3).value,
-            'content_format': ws.cell(row=row, column=4).value,
-            'paid_free': ws.cell(row=row, column=5).value,
-            'content_type': ws.cell(row=row, column=6).value,
-            'languages': ws.cell(row=row, column=8).value,
+            'week': ws.cell(row=row, column=col_map['week']).value,
+            'market': ws.cell(row=row, column=col_map['market']).value,
+            'platform': ws.cell(row=row, column=col_map['platform']).value,
+            'content_format': ws.cell(row=row, column=col_map['content_format']).value,
+            'paid_free': ws.cell(row=row, column=col_map['paid_free']).value,
+            'content_type': ws.cell(row=row, column=col_map['content_type']).value,
+            'languages': ws.cell(row=row, column=col_map['language']).value,
             'genres': genres,
             'release_date': release_date,
-            'current_rank': ws.cell(row=row, column=11).value,
-            'reach': ws.cell(row=row, column=12).value,
+            'current_rank': ws.cell(row=row, column=col_map['current_rank']).value,
+            'reach': ws.cell(row=row, column=col_map['reach']).value,
+            'total_time_spent': total_time_spent
         }
         shows.append(show)
     
@@ -1135,6 +1194,7 @@ def process_excel_file(filepath, job_id=None):
                         'reach': excel_show.get('reach'),
                         'week': excel_show.get('week'),
                         'market': excel_show.get('market'),
+                        'total_time_spent': excel_show.get('total_time_spent')
                     }
                     db.save_show(conn, is_sqlite, show_data)
                     all_genres = list(set(excel_show.get('genres', []) + imdb_genres))
@@ -1170,6 +1230,7 @@ def process_excel_file(filepath, job_id=None):
                         'reach': excel_show.get('reach'),
                         'week': excel_show.get('week'),
                         'market': excel_show.get('market'),
+                        'total_time_spent': excel_show.get('total_time_spent')
                     }
                     db.save_show(conn, is_sqlite, show_data)
                     db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
@@ -1185,14 +1246,16 @@ def process_excel_file(filepath, job_id=None):
                 'content_format': excel_show.get('content_format'),
                 'paid_free': excel_show.get('paid_free'),
                 'content_type': excel_show.get('content_type'),
-                'market': excel_show.get('market')
+                'market': excel_show.get('market'),
+                'total_time_spent': excel_show.get('total_time_spent')
             }
             db.save_weekly_ranking(conn, is_sqlite, weekly_ranking)
             
             update_query = """
             UPDATE shows SET 
                 current_rank = %s, reach = %s, week = %s, platform = %s,
-                content_format = %s, paid_free = %s, content_type = %s, market = %s
+                content_format = %s, paid_free = %s, content_type = %s, market = %s,
+                total_time_spent = %s
             WHERE id = %s
             """
             if is_sqlite:
@@ -1207,6 +1270,7 @@ def process_excel_file(filepath, job_id=None):
                 excel_show.get('paid_free'),
                 excel_show.get('content_type'),
                 excel_show.get('market'),
+                excel_show.get('total_time_spent'),
                 show_id
             ))
             conn.commit()
