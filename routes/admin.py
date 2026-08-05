@@ -274,7 +274,7 @@ def admin_get_show_details(show_id):
         cursor = conn.cursor()
         
         query = """
-        SELECT id, title, type, release_year, current_rank, platform, plot, poster_url, creators, stars, play_url
+        SELECT id, title, type, release_year, current_rank, platform, plot, poster_url, creators, stars, play_url, trailer_url
         FROM shows 
         WHERE id = %s
         """
@@ -307,6 +307,7 @@ def admin_get_show_details(show_id):
             "creators": row[8],
             "stars": row[9],
             "play_url": row[10],
+            "trailer_url": row[11],
             "genres": genres
         }
         return jsonify(show_details), 200
@@ -322,6 +323,7 @@ def admin_update_play_url(show_id):
         return jsonify({"error": "No data provided"}), 400
         
     play_url = data.get("play_url", "").strip()
+    trailer_url = data.get("trailer_url", "").strip()
     
     try:
         conn, is_sqlite = get_db()
@@ -336,15 +338,19 @@ def admin_update_play_url(show_id):
             conn.close()
             return jsonify({"error": "Show not found"}), 404
             
-        # Update play_url
-        update_query = "UPDATE shows SET play_url = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+        # Update play_url and trailer_url
+        update_query = "UPDATE shows SET play_url = %s, trailer_url = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
         if is_sqlite:
             update_query = update_query.replace("%s", "?")
-        cursor.execute(update_query, (play_url if play_url else None, show_id))
+        cursor.execute(update_query, (play_url if play_url else None, trailer_url if trailer_url else None, show_id))
         conn.commit()
         conn.close()
         
-        return jsonify({"message": "Play URL updated successfully", "play_url": play_url}), 200
+        return jsonify({
+            "message": "Streaming details updated successfully", 
+            "play_url": play_url,
+            "trailer_url": trailer_url
+        }), 200
     except Exception as e:
         print(f"Error in admin_update_play_url: {e}")
-        return jsonify({"error": "Failed to update play URL", "details": str(e)}), 500
+        return jsonify({"error": "Failed to update streaming details", "details": str(e)}), 500

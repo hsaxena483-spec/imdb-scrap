@@ -619,7 +619,8 @@ def api_show_detail_json(show_id):
     show_rows, show_cols = get_db_data("""
         SELECT id, title, type, release_year, end_year, global_rating, global_vote_count, 
                runtime_seconds, certificate, plot, poster_url, current_rank, creators, stars,
-               platform, content_format, paid_free, content_type, languages, reach, week, market
+               platform, content_format, paid_free, content_type, languages, reach, week, market,
+               play_url, trailer_url
         FROM shows 
         WHERE id = %s
     """, (show_id,))

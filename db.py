@@ -204,11 +204,21 @@ def init_db():
             week VARCHAR(50),
             market VARCHAR(50),
             play_url VARCHAR(500),
+            trailer_url VARCHAR(500),
             total_time_spent NUMERIC(15, 5),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+        
+        # Alter table to add trailer_url column if database already exists
+        try:
+            execute_query(conn, is_sqlite, "ALTER TABLE shows ADD COLUMN trailer_url VARCHAR(500)")
+            conn.commit()
+            print("Successfully added trailer_url column to shows table")
+        except Exception as alter_err:
+            # Ignored if column already exists
+            print(f"trailer_url column not added (may already exist): {alter_err}")
         
         # Alter table to add play_url column if database already exists
         try:
