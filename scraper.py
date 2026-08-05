@@ -94,7 +94,15 @@ def get_next_data(driver, url):
         next_data_script = soup.find("script", id="__NEXT_DATA__")
         
         if next_data_script and next_data_script.string:
-            return json.loads(next_data_script.string)
+            data = json.loads(next_data_script.string)
+            try:
+                # Add og:image as fallback poster url in data
+                og_image = soup.find('meta', property='og:image')
+                if og_image and og_image.get('content') and not 'social/imdb_logo' in og_image.get('content', ''):
+                    data['fallback_poster_url'] = og_image['content']
+            except Exception as meta_err:
+                pass
+            return data
         else:
             print(f"Warning: No __NEXT_DATA__ script tag found for {url}")
             return None
@@ -532,36 +540,123 @@ def read_excel_shows(filepath):
     
     return shows, platform_gender
 
-def search_imdb_show(driver, title):
+def clean_show_title(title):
+    import re
+    cleaned = title
+    # Remove things like "Season 1", "Season 02", "season 3", "S1", "S01", "s2"
+    cleaned = re.sub(r'\b(season|series|vol|volume|v)\.?\s*\d+\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\bS\d{1,2}\b', '', cleaned, flags=re.IGNORECASE)
+    # Remove year like (2024), [2024], 2024
+    cleaned = re.sub(r'[\(\[\{]?\b\d{4}\b[\)\]\}]?', '', cleaned)
+    # Remove trailing/leading colons, dashes, spaces
+    cleaned = re.sub(r'[\s\-:\,]+$', '', cleaned)
+    cleaned = re.sub(r'^[\s\-:\,]+', '', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+def search_imdb_show(driver, original_title):
     """
     Searches IMDb for a show title and returns the first result's ID, or None.
+    Uses query cleaning and scoring to filter the best matching TV Series or Movie.
     """
     import urllib.parse
-    search_url = f"https://www.imdb.com/find/?q={urllib.parse.quote(title)}&s=tt"
+    import re
     
-    try:
-        delay = random.uniform(1.0, 2.0)
-        time.sleep(delay)
-        driver.get(search_url)
-        time.sleep(3.0)
+    cleaned_title = clean_show_title(original_title)
+    
+    # Try searching with cleaned title first, fallback to original if they are different
+    queries_to_try = [cleaned_title]
+    if cleaned_title != original_title:
+        queries_to_try.append(original_title)
         
-        soup = BeautifulSoup(driver.page_source, "lxml")
-        
-        # Look for search results - IMDb uses ipc-metadata-list-summary-item links
-        result_links = soup.select('a[href*="/title/tt"]')
-        for link in result_links:
-            href = link.get('href', '')
-            if '/title/tt' in href:
-                # Extract the tt ID
-                import re
+    for query in queries_to_try:
+        search_url = f"https://www.imdb.com/find/?q={urllib.parse.quote(query)}&s=tt"
+        try:
+            delay = random.uniform(1.0, 2.0)
+            time.sleep(delay)
+            driver.get(search_url)
+            time.sleep(3.0)
+            
+            soup = BeautifulSoup(driver.page_source, "lxml")
+            containers = soup.find_all(class_="ipc-metadata-list-summary-item")
+            
+            candidates = []
+            for c in containers:
+                links = c.find_all('a', href=lambda h: h and '/title/tt' in h)
+                link = None
+                for l in links:
+                    if l.text.strip():
+                        link = l
+                        break
+                if not link and links:
+                    link = links[0]
+                if not link:
+                    continue
+                    
+                href = link.get('href', '')
                 match = re.search(r'(tt\d+)', href)
-                if match:
-                    return match.group(1)
-        
-        return None
-    except Exception as e:
-        print(f"  Error searching for '{title}': {e}")
-        return None
+                if not match:
+                    continue
+                show_id = match.group(1)
+                
+                title_text = link.text.strip()
+                container_text = c.get_text(" ")
+                
+                # Check for poster image in the container
+                has_poster = (c.select_one('.ipc-media__img') is not None) or (c.find('img') is not None)
+                
+                # Calculate match score
+                score = 0
+                
+                t_lower = title_text.lower()
+                q_lower = query.lower()
+                
+                if t_lower == q_lower:
+                    score += 100
+                elif q_lower in t_lower:
+                    score += 50
+                elif t_lower in q_lower:
+                    score += 40
+                else:
+                    # Keyword matching
+                    q_words = set(re.findall(r'\w+', q_lower))
+                    t_words = set(re.findall(r'\w+', t_lower))
+                    intersection = q_words.intersection(t_words)
+                    score += len(intersection) * 15
+                    
+                # Poster bonus
+                if has_poster:
+                    score += 20
+                    
+                # Type penalty/bonus
+                lower_ct = container_text.lower()
+                if "tv episode" in lower_ct or "podcast episode" in lower_ct:
+                    score -= 60
+                elif "tv series" in lower_ct:
+                    score += 30
+                elif "movie" in lower_ct:
+                    score += 20
+                elif "podcast series" in lower_ct:
+                    score -= 40
+                    
+                candidates.append({
+                    'id': show_id,
+                    'title': title_text,
+                    'score': score,
+                    'has_poster': has_poster
+                })
+                
+            if candidates:
+                candidates.sort(key=lambda x: x['score'], reverse=True)
+                best = candidates[0]
+                if best['score'] >= 40:
+                    return best['id']
+                    
+        except Exception as e:
+            print(f"  Error searching for query '{query}': {e}")
+            
+    return None
+
 
 def main():
     print("IMDb Show Scraper & Importer Initialization...")
@@ -753,6 +848,8 @@ def main():
                                     
                                     img = above_fold.get('primaryImage', {})
                                     imdb_data['poster_url'] = img.get('url') if img else None
+                                    if not imdb_data['poster_url'] and detail_json.get('fallback_poster_url'):
+                                        imdb_data['poster_url'] = detail_json['fallback_poster_url']
                                     
                                     # Parse genres
                                     genres_obj = above_fold.get('genres', {}).get('genres', [])
@@ -1130,6 +1227,8 @@ def process_excel_file(filepath, job_id=None):
                             
                             img = above_fold.get('primaryImage', {})
                             imdb_data['poster_url'] = img.get('url') if img else None
+                            if not imdb_data['poster_url'] and detail_json.get('fallback_poster_url'):
+                                imdb_data['poster_url'] = detail_json['fallback_poster_url']
                             
                             # Parse genres
                             genres_obj = above_fold.get('genres', {}).get('genres', [])
