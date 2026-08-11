@@ -135,6 +135,14 @@ def get_connection():
                 password=DB_PASSWORD
             )
             print(f"Successfully connected to PostgreSQL database '{DB_NAME}' at {DB_HOST}:{DB_PORT}.")
+            
+        # Set database query statement timeout to 30 seconds
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 30000;")
+        except Exception as timeout_err:
+            print(f"Warning: Failed to set PostgreSQL statement_timeout: {timeout_err}")
+            
         return conn, False
     except Exception as e:
         print(f"Warning: Failed to connect to PostgreSQL ({e}).")

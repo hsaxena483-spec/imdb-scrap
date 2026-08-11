@@ -1224,6 +1224,7 @@ def process_excel_file(filepath, job_id=None):
             
             cursor.execute(query_check, (title.lower().strip(),))
             row = cursor.fetchone()
+            cursor.close()
             if row:
                 existing_id = row[0]
                 
@@ -1464,6 +1465,7 @@ def process_excel_file(filepath, job_id=None):
                 excel_show.get('total_time_spent'),
                 show_id
             ))
+            cursor.close()
             conn.commit()
             
         # Update job to completed
