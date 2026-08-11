@@ -68,12 +68,8 @@ def init_driver():
         # This is the cleanest way and works out-of-the-box when Chrome is installed on the system path.
         driver = webdriver.Chrome(options=options)
     except Exception as e:
-        print(f"Direct Chrome initialization failed ({e}). Falling back to ChromeDriverManager...")
-        try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except Exception as fallback_err:
-            print(f"Fallback to ChromeDriverManager also failed: {fallback_err}")
-            raise fallback_err
+        print(f"Chrome initialization failed: {e}")
+        raise e
             
     try:
         driver.set_page_load_timeout(30)
