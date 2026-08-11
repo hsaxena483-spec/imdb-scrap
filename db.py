@@ -124,7 +124,7 @@ def get_connection():
         # Try to connect to PostgreSQL
         db_url = os.getenv("DATABASE_URL")
         if db_url:
-            conn = psycopg2.connect(db_url)
+            conn = psycopg2.connect(db_url, connect_timeout=15)
             print("Successfully connected to PostgreSQL database using DATABASE_URL.")
         else:
             conn = psycopg2.connect(
@@ -132,7 +132,8 @@ def get_connection():
                 port=DB_PORT,
                 dbname=DB_NAME,
                 user=DB_USER,
-                password=DB_PASSWORD
+                password=DB_PASSWORD,
+                connect_timeout=15
             )
             print(f"Successfully connected to PostgreSQL database '{DB_NAME}' at {DB_HOST}:{DB_PORT}.")
             

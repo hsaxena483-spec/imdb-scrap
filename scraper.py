@@ -1156,7 +1156,6 @@ def process_excel_file(filepath, job_id=None):
     Processes an uploaded Excel file, scrapes IMDb details in the background, 
     and writes progress states to the database.
     """
-    db.init_db()
     conn, is_sqlite = db.get_connection()
     driver = None
     
