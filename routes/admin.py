@@ -354,6 +354,21 @@ def admin_cancel_job(job_id):
         print(f"Error cancelling job: {e}")
         return jsonify({"error": "Failed to cancel job", "details": str(e)}), 500
 
+@admin_bp.route("/api/admin/test-selenium", methods=["GET"])
+@requires_admin_auth
+def admin_test_selenium():
+    try:
+        print("Testing Selenium initialization on server...")
+        driver = scraper.init_driver()
+        print("Selenium initialized successfully. Fetching a test page...")
+        driver.get("https://www.google.com")
+        title = driver.title
+        driver.quit()
+        return jsonify({"status": "success", "page_title": title}), 200
+    except Exception as e:
+        print(f"Selenium test failed: {e}")
+        return jsonify({"status": "failed", "error": str(e)}), 500
+
 @admin_bp.route("/api/admin/shows", methods=["GET"])
 @requires_admin_auth
 def admin_get_shows():
