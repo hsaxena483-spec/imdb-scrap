@@ -5,6 +5,7 @@ import json
 import sys
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from dotenv import load_dotenv
@@ -74,6 +75,12 @@ def init_driver():
             print(f"Fallback to ChromeDriverManager also failed: {fallback_err}")
             raise fallback_err
             
+    try:
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
+    except Exception as timeout_err:
+        print(f"Warning: Failed to set driver timeouts: {timeout_err}")
+        
     return driver
 
 def get_next_data(driver, url):
@@ -106,6 +113,8 @@ def get_next_data(driver, url):
         else:
             print(f"Warning: No __NEXT_DATA__ script tag found for {url}")
             return None
+    except (TimeoutException, WebDriverException) as e:
+        raise e
     except Exception as e:
         print(f"Error fetching page {url}: {e}")
         return None
@@ -652,6 +661,8 @@ def search_imdb_show(driver, original_title):
                 if best['score'] >= 40:
                     return best['id']
                     
+        except (TimeoutException, WebDriverException) as e:
+            raise e
         except Exception as e:
             print(f"  Error searching for query '{query}': {e}")
             
@@ -1118,6 +1129,28 @@ def update_job_progress(conn, is_sqlite, job_id, status, processed_shows, total_
     except Exception as e:
         print(f"Error updating job progress: {e}")
 
+def check_job_status(conn, is_sqlite, job_id):
+    if not job_id:
+        return "running"
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    
+    try:
+        cursor = conn.cursor()
+        query = "SELECT status FROM scraping_jobs WHERE id = %s"
+        if is_sqlite:
+            query = query.replace("%s", "?")
+        cursor.execute(query, (job_id,))
+        row = cursor.fetchone()
+        cursor.close()
+        if row:
+            return row[0]
+    except Exception as e:
+        print(f"Error checking job status in thread: {e}")
+    return "running"
+
 def process_excel_file(filepath, job_id=None):
     """
     Processes an uploaded Excel file, scrapes IMDb details in the background, 
@@ -1166,6 +1199,19 @@ def process_excel_file(filepath, job_id=None):
             title = excel_show['title']
             show_week = excel_show.get('week') or week_code
             
+            # Check job status for Pause / Cancel
+            job_status = check_job_status(conn, is_sqlite, job_id)
+            while job_status == "paused":
+                time.sleep(2.0)
+                job_status = check_job_status(conn, is_sqlite, job_id)
+                
+            if job_status in ["cancelled", "stopped"]:
+                print(f"Job {job_id} cancelled/stopped by user. Exiting thread.")
+                if driver:
+                    try: driver.quit()
+                    except Exception: pass
+                return
+            
             # Update job progress
             update_job_progress(conn, is_sqlite, job_id, "running", i - 1, total_shows, f"Scraping '{title}' ({i}/{total_shows})")
             
@@ -1187,125 +1233,166 @@ def process_excel_file(filepath, job_id=None):
                 # Existing show - skip scrape
                 print(f"Show {title} exists. Skipping scrape.")
             else:
-                # Scrape on-demand
-                if not driver:
-                    driver = init_driver()
-                
-                show_id = search_imdb_show(driver, title)
-                if show_id:
-                    # Scrape details
-                    detail_url = f"https://www.imdb.com/title/{show_id}/"
-                    detail_json = get_next_data(driver, detail_url)
+                try:
+                    # Scrape on-demand
+                    if not driver:
+                        driver = init_driver()
                     
-                    imdb_data = {}
-                    imdb_genres = []
-                    if detail_json:
-                        page_props = detail_json.get('props', {}).get('pageProps', {})
-                        above_fold = page_props.get('aboveTheFoldData', {})
-                        if above_fold:
-                            ratings = above_fold.get('ratingsSummary', {})
-                            imdb_data['global_rating'] = ratings.get('aggregateRating')
-                            imdb_data['global_vote_count'] = ratings.get('voteCount')
-                            
-                            cert = above_fold.get('certificate', {})
-                            imdb_data['certificate'] = cert.get('rating') if cert else None
-                            
-                            runtime_obj = above_fold.get('runtime', {})
-                            imdb_data['runtime_seconds'] = runtime_obj.get('seconds') if runtime_obj else None
-                            
-                            release_year_obj = above_fold.get('releaseYear', {})
-                            imdb_data['release_year'] = release_year_obj.get('year') if release_year_obj else None
-                            imdb_data['end_year'] = release_year_obj.get('endYear') if release_year_obj else None
-                            
-                            title_type = above_fold.get('titleType', {})
-                            imdb_data['type'] = title_type.get('id') if title_type else None
-                            
-                            plot_obj = above_fold.get('plot', {})
-                            if plot_obj:
-                                plot_text = plot_obj.get('plotText', {})
-                                imdb_data['plot'] = plot_text.get('plainText') if plot_text else None
-                            
-                            img = above_fold.get('primaryImage', {})
-                            imdb_data['poster_url'] = img.get('url') if img else None
-                            if not imdb_data['poster_url'] and detail_json.get('fallback_poster_url'):
-                                imdb_data['poster_url'] = detail_json['fallback_poster_url']
-                            
-                            # Parse genres
-                            genres_obj = above_fold.get('genres', {}).get('genres', [])
-                            for g in genres_obj:
-                                g_text = g.get('text')
-                                if g_text:
-                                    imdb_genres.append(g_text)
-                                    
-                            creators_list = []
-                            stars_list = []
-                            for credit in above_fold.get('principalCreditsV2', []):
-                                grouping_text = credit.get('grouping', {}).get('text', '').lower()
-                                names = [c.get('name', {}).get('nameText', {}).get('text', '') for c in credit.get('credits', [])]
-                                names = [n for n in names if n]
-                                if 'creator' in grouping_text or 'director' in grouping_text or 'writer' in grouping_text:
-                                    creators_list.extend(names)
-                                elif 'star' in grouping_text or 'cast' in grouping_text or 'actor' in grouping_text:
-                                    stars_list.extend(names)
-                            
-                            if not creators_list and not stars_list:
-                                main_col_data = page_props.get('mainColumnData', {})
-                                for credit in main_col_data.get('principalCredits', []):
-                                    category = credit.get('category', {}).get('text', '').lower()
+                    show_id = search_imdb_show(driver, title)
+                    if show_id:
+                        # Scrape details
+                        detail_url = f"https://www.imdb.com/title/{show_id}/"
+                        detail_json = get_next_data(driver, detail_url)
+                        
+                        imdb_data = {}
+                        imdb_genres = []
+                        if detail_json:
+                            page_props = detail_json.get('props', {}).get('pageProps', {})
+                            above_fold = page_props.get('aboveTheFoldData', {})
+                            if above_fold:
+                                ratings = above_fold.get('ratingsSummary', {})
+                                imdb_data['global_rating'] = ratings.get('aggregateRating')
+                                imdb_data['global_vote_count'] = ratings.get('voteCount')
+                                
+                                cert = above_fold.get('certificate', {})
+                                imdb_data['certificate'] = cert.get('rating') if cert else None
+                                
+                                runtime_obj = above_fold.get('runtime', {})
+                                imdb_data['runtime_seconds'] = runtime_obj.get('seconds') if runtime_obj else None
+                                
+                                release_year_obj = above_fold.get('releaseYear', {})
+                                imdb_data['release_year'] = release_year_obj.get('year') if release_year_obj else None
+                                imdb_data['end_year'] = release_year_obj.get('endYear') if release_year_obj else None
+                                
+                                title_type = above_fold.get('titleType', {})
+                                imdb_data['type'] = title_type.get('id') if title_type else None
+                                
+                                plot_obj = above_fold.get('plot', {})
+                                if plot_obj:
+                                    plot_text = plot_obj.get('plotText', {})
+                                    imdb_data['plot'] = plot_text.get('plainText') if plot_text else None
+                                
+                                img = above_fold.get('primaryImage', {})
+                                imdb_data['poster_url'] = img.get('url') if img else None
+                                if not imdb_data['poster_url'] and detail_json.get('fallback_poster_url'):
+                                    imdb_data['poster_url'] = detail_json['fallback_poster_url']
+                                
+                                # Parse genres
+                                genres_obj = above_fold.get('genres', {}).get('genres', [])
+                                for g in genres_obj:
+                                    g_text = g.get('text')
+                                    if g_text:
+                                        imdb_genres.append(g_text)
+                                        
+                                creators_list = []
+                                stars_list = []
+                                for credit in above_fold.get('principalCreditsV2', []):
+                                    grouping_text = credit.get('grouping', {}).get('text', '').lower()
                                     names = [c.get('name', {}).get('nameText', {}).get('text', '') for c in credit.get('credits', [])]
                                     names = [n for n in names if n]
-                                    if 'creator' in category or 'director' in category or 'writer' in category:
+                                    if 'creator' in grouping_text or 'director' in grouping_text or 'writer' in grouping_text:
                                         creators_list.extend(names)
-                                    elif 'star' in category or 'cast' in category or 'actor' in category:
+                                    elif 'star' in grouping_text or 'cast' in grouping_text or 'actor' in grouping_text:
                                         stars_list.extend(names)
-                            
-                            imdb_data['creators'] = ', '.join(creators_list) if creators_list else None
-                            imdb_data['stars'] = ', '.join(stars_list) if stars_list else None
-                            
-                    ratings_url = f"https://www.imdb.com/title/{show_id}/ratings/"
-                    ratings_json = get_next_data(driver, ratings_url)
-                    country_ratings = extract_country_ratings(ratings_json)
+                                
+                                if not creators_list and not stars_list:
+                                    main_col_data = page_props.get('mainColumnData', {})
+                                    for credit in main_col_data.get('principalCredits', []):
+                                        category = credit.get('category', {}).get('text', '').lower()
+                                        names = [c.get('name', {}).get('nameText', {}).get('text', '') for c in credit.get('credits', [])]
+                                        names = [n for n in names if n]
+                                        if 'creator' in category or 'director' in category or 'writer' in category:
+                                            creators_list.extend(names)
+                                        elif 'star' in category or 'cast' in category or 'actor' in category:
+                                            stars_list.extend(names)
+                                
+                                imdb_data['creators'] = ', '.join(creators_list) if creators_list else None
+                                imdb_data['stars'] = ', '.join(stars_list) if stars_list else None
+                                
+                        ratings_url = f"https://www.imdb.com/title/{show_id}/ratings/"
+                        ratings_json = get_next_data(driver, ratings_url)
+                        country_ratings = extract_country_ratings(ratings_json)
+                        
+                        reviews_url = f"https://www.imdb.com/title/{show_id}/reviews/"
+                        try: driver.delete_all_cookies()
+                        except Exception: pass
+                        reviews_json = get_next_data(driver, reviews_url)
+                        reviews = extract_reviews(reviews_json)
+                        
+                        show_data = {
+                            'id': show_id,
+                            'title': title,
+                            'type': imdb_data.get('type', excel_show.get('content_type')),
+                            'release_year': imdb_data.get('release_year'),
+                            'end_year': imdb_data.get('end_year'),
+                            'global_rating': imdb_data.get('global_rating'),
+                            'global_vote_count': imdb_data.get('global_vote_count'),
+                            'runtime_seconds': imdb_data.get('runtime_seconds'),
+                            'certificate': imdb_data.get('certificate'),
+                            'plot': imdb_data.get('plot'),
+                            'poster_url': imdb_data.get('poster_url'),
+                            'release_date': excel_show.get('release_date'),
+                            'total_episodes': None,
+                            'creators': imdb_data.get('creators'),
+                            'stars': imdb_data.get('stars'),
+                            'current_rank': excel_show.get('current_rank'),
+                            'platform': excel_show.get('platform'),
+                            'content_format': excel_show.get('content_format'),
+                            'paid_free': excel_show.get('paid_free'),
+                            'content_type': excel_show.get('content_type'),
+                            'languages': excel_show.get('languages'),
+                            'reach': excel_show.get('reach'),
+                            'week': excel_show.get('week'),
+                            'market': excel_show.get('market'),
+                            'total_time_spent': excel_show.get('total_time_spent')
+                        }
+                        db.save_show(conn, is_sqlite, show_data)
+                        all_genres = list(set(excel_show.get('genres', []) + imdb_genres))
+                        db.save_genres(conn, is_sqlite, show_id, all_genres)
+                        db.save_country_ratings(conn, is_sqlite, show_id, country_ratings)
+                        db.save_reviews(conn, is_sqlite, show_id, reviews)
+                        conn.commit()
+                    else:
+                        import hashlib
+                        show_id = "xl_" + hashlib.md5(title.lower().strip().encode('utf-8')).hexdigest()[:10]
+                        show_data = {
+                            'id': show_id,
+                            'title': title,
+                            'type': excel_show.get('content_type'),
+                            'release_year': None,
+                            'end_year': None,
+                            'global_rating': None,
+                            'global_vote_count': None,
+                            'runtime_seconds': None,
+                            'certificate': None,
+                            'plot': None,
+                            'poster_url': None,
+                            'release_date': excel_show.get('release_date'),
+                            'total_episodes': None,
+                            'creators': None,
+                            'stars': None,
+                            'current_rank': excel_show.get('current_rank'),
+                            'platform': excel_show.get('platform'),
+                            'content_format': excel_show.get('content_format'),
+                            'paid_free': excel_show.get('paid_free'),
+                            'content_type': excel_show.get('content_type'),
+                            'languages': excel_show.get('languages'),
+                            'reach': excel_show.get('reach'),
+                            'week': excel_show.get('week'),
+                            'market': excel_show.get('market'),
+                            'total_time_spent': excel_show.get('total_time_spent')
+                        }
+                        db.save_show(conn, is_sqlite, show_data)
+                        db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
+                        conn.commit()
+                except (TimeoutException, WebDriverException) as selenium_err:
+                    print(f"Selenium error during scraping '{title}': {selenium_err}. Restarting driver...")
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = None
                     
-                    reviews_url = f"https://www.imdb.com/title/{show_id}/reviews/"
-                    try: driver.delete_all_cookies()
-                    except Exception: pass
-                    reviews_json = get_next_data(driver, reviews_url)
-                    reviews = extract_reviews(reviews_json)
-                    
-                    show_data = {
-                        'id': show_id,
-                        'title': title,
-                        'type': imdb_data.get('type', excel_show.get('content_type')),
-                        'release_year': imdb_data.get('release_year'),
-                        'end_year': imdb_data.get('end_year'),
-                        'global_rating': imdb_data.get('global_rating'),
-                        'global_vote_count': imdb_data.get('global_vote_count'),
-                        'runtime_seconds': imdb_data.get('runtime_seconds'),
-                        'certificate': imdb_data.get('certificate'),
-                        'plot': imdb_data.get('plot'),
-                        'poster_url': imdb_data.get('poster_url'),
-                        'release_date': excel_show.get('release_date'),
-                        'total_episodes': None,
-                        'creators': imdb_data.get('creators'),
-                        'stars': imdb_data.get('stars'),
-                        'current_rank': excel_show.get('current_rank'),
-                        'platform': excel_show.get('platform'),
-                        'content_format': excel_show.get('content_format'),
-                        'paid_free': excel_show.get('paid_free'),
-                        'content_type': excel_show.get('content_type'),
-                        'languages': excel_show.get('languages'),
-                        'reach': excel_show.get('reach'),
-                        'week': excel_show.get('week'),
-                        'market': excel_show.get('market'),
-                        'total_time_spent': excel_show.get('total_time_spent')
-                    }
-                    db.save_show(conn, is_sqlite, show_data)
-                    all_genres = list(set(excel_show.get('genres', []) + imdb_genres))
-                    db.save_genres(conn, is_sqlite, show_id, all_genres)
-                    db.save_country_ratings(conn, is_sqlite, show_id, country_ratings)
-                    db.save_reviews(conn, is_sqlite, show_id, reviews)
-                    conn.commit()
-                else:
                     import hashlib
                     show_id = "xl_" + hashlib.md5(title.lower().strip().encode('utf-8')).hexdigest()[:10]
                     show_data = {
@@ -1338,6 +1425,7 @@ def process_excel_file(filepath, job_id=None):
                     db.save_show(conn, is_sqlite, show_data)
                     db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
                     conn.commit()
+                    time.sleep(5)
             
             # Save the weekly ranking
             weekly_ranking = {

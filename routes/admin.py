@@ -160,6 +160,72 @@ def admin_upload_excel():
         print(f"Error spawning scraping thread: {e}")
         return jsonify({"error": "Failed to start scraping background thread", "details": str(e)}), 500
 
+def _serialize_job(row):
+    import datetime
+    
+    created_at_val = row[6]
+    updated_at_val = row[7]
+    created_at_ts = None
+    updated_at_ts = None
+    
+    if created_at_val:
+        if isinstance(created_at_val, datetime.datetime):
+            created_at_ts = created_at_val.timestamp()
+        elif isinstance(created_at_val, str):
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    created_at_ts = datetime.datetime.strptime(created_at_val, fmt).timestamp()
+                    break
+                except ValueError:
+                    continue
+                    
+    if updated_at_val:
+        if isinstance(updated_at_val, datetime.datetime):
+            updated_at_ts = updated_at_val.timestamp()
+        elif isinstance(updated_at_val, str):
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    updated_at_ts = datetime.datetime.strptime(updated_at_val, fmt).timestamp()
+                    break
+                except ValueError:
+                    continue
+                    
+    return {
+        "id": row[0],
+        "status": row[1],
+        "total_shows": row[2],
+        "processed_shows": row[3],
+        "current_show": row[4],
+        "error_message": row[5],
+        "created_at": row[6].isoformat() if row[6] and hasattr(row[6], 'isoformat') else str(row[6]),
+        "updated_at": row[7].isoformat() if row[7] and hasattr(row[7], 'isoformat') else str(row[7]),
+        "created_at_ts": created_at_ts,
+        "updated_at_ts": updated_at_ts
+    }
+
+@admin_bp.route("/api/admin/scraping-job/latest", methods=["GET"])
+@requires_admin_auth
+def admin_get_latest_job():
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        query = """
+        SELECT id, status, total_shows, processed_shows, current_show, error_message, created_at, updated_at 
+        FROM scraping_jobs 
+        ORDER BY id DESC LIMIT 1
+        """
+        cursor.execute(query)
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            return jsonify({"message": "No jobs found"}), 404
+            
+        return jsonify(_serialize_job(row)), 200
+    except Exception as e:
+        print(f"Error fetching latest job: {e}")
+        return jsonify({"error": "Failed to fetch latest job", "details": str(e)}), 500
+
 @admin_bp.route("/api/admin/scraping-job/<int:job_id>", methods=["GET"])
 @requires_admin_auth
 def admin_get_job_status(job_id):
@@ -181,19 +247,112 @@ def admin_get_job_status(job_id):
         if not row:
             return jsonify({"error": "Job not found"}), 404
             
-        return jsonify({
-            "id": row[0],
-            "status": row[1],
-            "total_shows": row[2],
-            "processed_shows": row[3],
-            "current_show": row[4],
-            "error_message": row[5],
-            "created_at": row[6].isoformat() if row[6] and hasattr(row[6], 'isoformat') else str(row[6]),
-            "updated_at": row[7].isoformat() if row[7] and hasattr(row[7], 'isoformat') else str(row[7])
-        }), 200
+        return jsonify(_serialize_job(row)), 200
     except Exception as e:
         print(f"Error fetching job status: {e}")
         return jsonify({"error": "Failed to fetch job status", "details": str(e)}), 500
+
+@admin_bp.route("/api/admin/scraping-job/<int:job_id>/pause", methods=["POST"])
+@requires_admin_auth
+def admin_pause_job(job_id):
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        
+        # Check current status
+        query_check = "SELECT status FROM scraping_jobs WHERE id = %s"
+        if is_sqlite:
+            query_check = query_check.replace("%s", "?")
+        cursor.execute(query_check, (job_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Job not found"}), 404
+            
+        status = row[0]
+        if status != "running":
+            conn.close()
+            return jsonify({"error": f"Cannot pause job in status '{status}'"}), 400
+            
+        query_update = "UPDATE scraping_jobs SET status = 'paused', updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+        if is_sqlite:
+            query_update = query_update.replace("%s", "?")
+        cursor.execute(query_update, (job_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"message": "Job paused successfully", "status": "paused"}), 200
+    except Exception as e:
+        print(f"Error pausing job: {e}")
+        return jsonify({"error": "Failed to pause job", "details": str(e)}), 500
+
+@admin_bp.route("/api/admin/scraping-job/<int:job_id>/resume", methods=["POST"])
+@requires_admin_auth
+def admin_resume_job(job_id):
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        
+        # Check current status
+        query_check = "SELECT status FROM scraping_jobs WHERE id = %s"
+        if is_sqlite:
+            query_check = query_check.replace("%s", "?")
+        cursor.execute(query_check, (job_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Job not found"}), 404
+            
+        status = row[0]
+        if status != "paused":
+            conn.close()
+            return jsonify({"error": f"Cannot resume job in status '{status}'"}), 400
+            
+        query_update = "UPDATE scraping_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+        if is_sqlite:
+            query_update = query_update.replace("%s", "?")
+        cursor.execute(query_update, (job_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"message": "Job resumed successfully", "status": "running"}), 200
+    except Exception as e:
+        print(f"Error resuming job: {e}")
+        return jsonify({"error": "Failed to resume job", "details": str(e)}), 500
+
+@admin_bp.route("/api/admin/scraping-job/<int:job_id>/cancel", methods=["POST"])
+@requires_admin_auth
+def admin_cancel_job(job_id):
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        
+        # Check current status
+        query_check = "SELECT status FROM scraping_jobs WHERE id = %s"
+        if is_sqlite:
+            query_check = query_check.replace("%s", "?")
+        cursor.execute(query_check, (job_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Job not found"}), 404
+            
+        status = row[0]
+        if status not in ["pending", "running", "paused"]:
+            conn.close()
+            return jsonify({"error": f"Cannot cancel job in status '{status}'"}), 400
+            
+        query_update = "UPDATE scraping_jobs SET status = 'cancelled', current_show = 'Cancelled by user', updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+        if is_sqlite:
+            query_update = query_update.replace("%s", "?")
+        cursor.execute(query_update, (job_id,))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"message": "Job cancelled successfully", "status": "cancelled"}), 200
+    except Exception as e:
+        print(f"Error cancelling job: {e}")
+        return jsonify({"error": "Failed to cancel job", "details": str(e)}), 500
 
 @admin_bp.route("/api/admin/shows", methods=["GET"])
 @requires_admin_auth
