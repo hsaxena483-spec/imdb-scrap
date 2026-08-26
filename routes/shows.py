@@ -156,7 +156,7 @@ def index():
                s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
         FROM shows s
         WHERE {where_sql}
-        ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.global_rating DESC NULLS LAST
+        ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.reach DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     all_params = list(params) + [per_page, offset]
@@ -503,7 +503,7 @@ def api_shows_json():
                s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
         FROM shows s
         WHERE {where_sql}
-        ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.global_rating DESC NULLS LAST
+        ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.reach DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     all_params = list(params) + [per_page, offset]
