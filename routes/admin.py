@@ -669,3 +669,65 @@ def admin_update_show_details(show_id):
         print(f"Error in admin_update_show_details: {e}")
         return jsonify({"error": "Failed to update show details", "details": str(e)}), 500
 
+@admin_bp.route("/api/admin/upload-image", methods=["POST"])
+@requires_admin_auth
+def admin_upload_image():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part in the request"}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+        
+    if not file:
+        return jsonify({"error": "File is empty"}), 400
+        
+    try:
+        # Retrieve ImageKit credentials from environment
+        private_key = os.environ.get("IMAGEKIT_PRIVATE_KEY")
+        
+        if not private_key:
+            return jsonify({"error": "ImageKit private key not configured on server"}), 500
+            
+        import requests
+        # Prepare the files and data for ImageKit
+        file_bytes = file.read()
+        
+        files = {
+            'file': (file.filename, file_bytes, file.content_type)
+        }
+        data = {
+            'fileName': file.filename,
+            'folder': '/cott-posters'
+        }
+        
+        # Call ImageKit upload API
+        response = requests.post(
+            'https://upload.imagekit.io/api/v1/files/upload',
+            files=files,
+            data=data,
+            auth=(private_key, '')
+        )
+        
+        if response.status_code != 200:
+            try:
+                err_details = response.json()
+            except Exception:
+                err_details = response.text
+            return jsonify({
+                "error": "Failed to upload image to ImageKit",
+                "details": err_details
+            }), response.status_code
+            
+        res_data = response.json()
+        image_url = res_data.get("url")
+        
+        return jsonify({
+            "message": "Image uploaded successfully to ImageKit",
+            "url": image_url
+        }), 200
+        
+    except Exception as e:
+        print(f"Error in admin_upload_image: {e}")
+        return jsonify({"error": "Failed to process image upload", "details": str(e)}), 500
+
