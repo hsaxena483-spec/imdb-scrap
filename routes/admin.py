@@ -398,7 +398,7 @@ def admin_get_shows():
             SELECT id, title, type, release_year, current_rank, platform, play_url 
             FROM shows 
             WHERE title ILIKE %s 
-            ORDER BY title ASC 
+            ORDER BY CASE WHEN current_rank IS NULL THEN 1 ELSE 0 END, current_rank ASC, title ASC 
             LIMIT %s OFFSET %s
             """
             if is_sqlite:
@@ -408,7 +408,7 @@ def admin_get_shows():
             query = """
             SELECT id, title, type, release_year, current_rank, platform, play_url 
             FROM shows 
-            ORDER BY title ASC 
+            ORDER BY CASE WHEN current_rank IS NULL THEN 1 ELSE 0 END, current_rank ASC, title ASC 
             LIMIT %s OFFSET %s
             """
             if is_sqlite:
@@ -448,7 +448,8 @@ def admin_get_show_details(show_id):
         cursor = conn.cursor()
         
         query = """
-        SELECT id, title, type, release_year, current_rank, platform, plot, poster_url, creators, stars, play_url, trailer_url
+        SELECT id, title, type, release_year, current_rank, platform, plot, poster_url, creators, stars, 
+               play_url, trailer_url, global_rating, global_vote_count, runtime_seconds
         FROM shows 
         WHERE id = %s
         """
@@ -467,6 +468,29 @@ def admin_get_show_details(show_id):
             genre_query = genre_query.replace("%s", "?")
         cursor.execute(genre_query, (show_id,))
         genres = [r[0] for r in cursor.fetchall()]
+        
+        # Fetch reviews
+        reviews_query = """
+        SELECT id, author_username, rating, summary, content 
+        FROM show_reviews 
+        WHERE show_id = %s
+        ORDER BY submission_date DESC
+        """
+        if is_sqlite:
+            reviews_query = reviews_query.replace("%s", "?")
+        cursor.execute(reviews_query, (show_id,))
+        reviews_rows = cursor.fetchall()
+        
+        reviews = []
+        for r in reviews_rows:
+            reviews.append({
+                "id": r[0],
+                "author_username": r[1] or "Anonymous",
+                "rating": r[2],
+                "summary": r[3] or "",
+                "content": r[4] or ""
+            })
+            
         conn.close()
         
         show_details = {
@@ -482,7 +506,11 @@ def admin_get_show_details(show_id):
             "stars": row[9],
             "play_url": row[10],
             "trailer_url": row[11],
-            "genres": genres
+            "global_rating": float(row[12]) if row[12] is not None else None,
+            "global_vote_count": row[13],
+            "runtime_seconds": row[14],
+            "genres": genres,
+            "reviews": reviews
         }
         return jsonify(show_details), 200
     except Exception as e:
@@ -557,6 +585,22 @@ def admin_update_show_details(show_id):
     except ValueError:
         current_rank = None
 
+    try:
+        global_rating = float(data.get("global_rating")) if data.get("global_rating") is not None and str(data.get("global_rating")).strip() != "" else None
+    except ValueError:
+        global_rating = None
+
+    try:
+        global_vote_count = int(data.get("global_vote_count")) if data.get("global_vote_count") is not None and str(data.get("global_vote_count")).strip() != "" else None
+    except ValueError:
+        global_vote_count = None
+
+    try:
+        runtime_mins = int(data.get("runtime_mins")) if data.get("runtime_mins") is not None and str(data.get("runtime_mins")).strip() != "" else None
+        runtime_seconds = runtime_mins * 60 if runtime_mins is not None else None
+    except ValueError:
+        runtime_seconds = None
+
     platform = data.get("platform", "").strip()
     plot = data.get("plot", "").strip()
     poster_url = data.get("poster_url", "").strip()
@@ -565,6 +609,7 @@ def admin_update_show_details(show_id):
     play_url = data.get("play_url", "").strip()
     trailer_url = data.get("trailer_url", "").strip()
     genres = data.get("genres", [])
+    reviews = data.get("reviews", [])
     
     if not title:
         return jsonify({"error": "Title is required"}), 400
@@ -590,12 +635,13 @@ def admin_update_show_details(show_id):
         user_row = cursor.fetchone()
         user_id = user_row[0] if user_row else g.current_admin
         
-        # Update shows table including updated_by
+        # Update shows table
         update_query = """
         UPDATE shows 
         SET title = %s, type = %s, release_year = %s, current_rank = %s, platform = %s, 
             plot = %s, poster_url = %s, creators = %s, stars = %s, play_url = %s, 
-            trailer_url = %s, updated_by = %s, updated_at = CURRENT_TIMESTAMP 
+            trailer_url = %s, global_rating = %s, global_vote_count = %s, runtime_seconds = %s,
+            updated_by = %s, updated_at = CURRENT_TIMESTAMP 
         WHERE id = %s
         """
         if is_sqlite:
@@ -613,18 +659,19 @@ def admin_update_show_details(show_id):
             stars if stars else None, 
             play_url if play_url else None, 
             trailer_url if trailer_url else None, 
+            global_rating,
+            global_vote_count,
+            runtime_seconds,
             user_id,
             show_id
         ))
         
         # Update genres
-        # First, delete existing genres
         delete_genres_query = "DELETE FROM show_genres WHERE show_id = %s"
         if is_sqlite:
             delete_genres_query = delete_genres_query.replace("%s", "?")
         cursor.execute(delete_genres_query, (show_id,))
         
-        # Then, insert new genres
         if isinstance(genres, list) and len(genres) > 0:
             insert_genre_query = """
             INSERT INTO show_genres (show_id, genre)
@@ -641,29 +688,62 @@ def admin_update_show_details(show_id):
                         try:
                             cursor.execute(insert_genre_query, (show_id, clean_genre))
                         except Exception:
-                            # ignore duplicate constraints just in case
                             pass
+                            
+        # Update reviews
+        submitted_review_ids = [r.get("id") for r in reviews if r.get("id")]
+        
+        if submitted_review_ids:
+            placeholders = ",".join(["%s"] * len(submitted_review_ids))
+            delete_reviews_query = f"DELETE FROM show_reviews WHERE show_id = %s AND id NOT IN ({placeholders})"
+            if is_sqlite:
+                delete_reviews_query = delete_reviews_query.replace("%s", "?")
+            cursor.execute(delete_reviews_query, (show_id, *submitted_review_ids))
+        else:
+            delete_reviews_query = "DELETE FROM show_reviews WHERE show_id = %s"
+            if is_sqlite:
+                delete_reviews_query = delete_reviews_query.replace("%s", "?")
+            cursor.execute(delete_reviews_query, (show_id,))
+            
+        import uuid
+        for r in reviews:
+            rev_id = r.get("id")
+            author = r.get("author_username", "").strip() or "Anonymous"
+            rev_rating = r.get("rating")
+            try:
+                rev_rating = int(rev_rating) if rev_rating is not None and str(rev_rating).strip() != "" else None
+            except ValueError:
+                rev_rating = None
+            summary = r.get("summary", "").strip()
+            content = r.get("content", "").strip()
+            
+            if not summary and not content:
+                continue
+                
+            if rev_id:
+                update_rev_query = """
+                UPDATE show_reviews 
+                SET author_username = %s, rating = %s, summary = %s, content = %s 
+                WHERE id = %s AND show_id = %s
+                """
+                if is_sqlite:
+                    update_rev_query = update_rev_query.replace("%s", "?")
+                cursor.execute(update_rev_query, (author, rev_rating, summary, content, rev_id, show_id))
+            else:
+                new_id = f"rev_{uuid.uuid4().hex[:12]}"
+                insert_rev_query = """
+                INSERT INTO show_reviews (id, show_id, author_username, rating, summary, content, submission_date)
+                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_DATE)
+                """
+                if is_sqlite:
+                    insert_rev_query = insert_rev_query.replace("%s", "?")
+                cursor.execute(insert_rev_query, (new_id, show_id, author, rev_rating, summary, content))
                             
         conn.commit()
         conn.close()
         
         return jsonify({
-            "message": "Show details updated successfully",
-            "show": {
-                "id": show_id,
-                "title": title,
-                "type": show_type,
-                "release_year": release_year,
-                "current_rank": current_rank,
-                "platform": platform,
-                "plot": plot,
-                "poster_url": poster_url,
-                "creators": creators,
-                "stars": stars,
-                "play_url": play_url,
-                "trailer_url": trailer_url,
-                "genres": genres
-            }
+            "message": "Show details updated successfully"
         }), 200
     except Exception as e:
         print(f"Error in admin_update_show_details: {e}")
