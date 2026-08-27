@@ -512,11 +512,19 @@ def admin_update_play_url(show_id):
             conn.close()
             return jsonify({"error": "Show not found"}), 404
             
-        # Update play_url and trailer_url
-        update_query = "UPDATE shows SET play_url = %s, trailer_url = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+        # Get admin user ID from email
+        user_query = "SELECT id FROM users WHERE email = %s"
+        if is_sqlite:
+            user_query = user_query.replace("%s", "?")
+        cursor.execute(user_query, (g.current_admin,))
+        user_row = cursor.fetchone()
+        user_id = user_row[0] if user_row else g.current_admin
+        
+        # Update play_url, trailer_url, and updated_by
+        update_query = "UPDATE shows SET play_url = %s, trailer_url = %s, updated_by = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
         if is_sqlite:
             update_query = update_query.replace("%s", "?")
-        cursor.execute(update_query, (play_url if play_url else None, trailer_url if trailer_url else None, show_id))
+        cursor.execute(update_query, (play_url if play_url else None, trailer_url if trailer_url else None, user_id, show_id))
         conn.commit()
         conn.close()
         
@@ -528,3 +536,136 @@ def admin_update_play_url(show_id):
     except Exception as e:
         print(f"Error in admin_update_play_url: {e}")
         return jsonify({"error": "Failed to update streaming details", "details": str(e)}), 500
+
+@admin_bp.route("/api/admin/shows/<show_id>", methods=["PUT"])
+@requires_admin_auth
+def admin_update_show_details(show_id):
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+        
+    title = data.get("title", "").strip()
+    show_type = data.get("type", "").strip()
+    
+    try:
+        release_year = int(data.get("release_year")) if data.get("release_year") is not None and str(data.get("release_year")).strip() != "" else None
+    except ValueError:
+        release_year = None
+
+    try:
+        current_rank = int(data.get("current_rank")) if data.get("current_rank") is not None and str(data.get("current_rank")).strip() != "" else None
+    except ValueError:
+        current_rank = None
+
+    platform = data.get("platform", "").strip()
+    plot = data.get("plot", "").strip()
+    poster_url = data.get("poster_url", "").strip()
+    creators = data.get("creators", "").strip()
+    stars = data.get("stars", "").strip()
+    play_url = data.get("play_url", "").strip()
+    trailer_url = data.get("trailer_url", "").strip()
+    genres = data.get("genres", [])
+    
+    if not title:
+        return jsonify({"error": "Title is required"}), 400
+        
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        
+        # Check if show exists
+        check_query = "SELECT COUNT(*) FROM shows WHERE id = %s"
+        if is_sqlite:
+            check_query = check_query.replace("%s", "?")
+        cursor.execute(check_query, (show_id,))
+        if cursor.fetchone()[0] == 0:
+            conn.close()
+            return jsonify({"error": "Show not found"}), 404
+            
+        # Get admin user ID from email
+        user_query = "SELECT id FROM users WHERE email = %s"
+        if is_sqlite:
+            user_query = user_query.replace("%s", "?")
+        cursor.execute(user_query, (g.current_admin,))
+        user_row = cursor.fetchone()
+        user_id = user_row[0] if user_row else g.current_admin
+        
+        # Update shows table including updated_by
+        update_query = """
+        UPDATE shows 
+        SET title = %s, type = %s, release_year = %s, current_rank = %s, platform = %s, 
+            plot = %s, poster_url = %s, creators = %s, stars = %s, play_url = %s, 
+            trailer_url = %s, updated_by = %s, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = %s
+        """
+        if is_sqlite:
+            update_query = update_query.replace("%s", "?")
+            
+        cursor.execute(update_query, (
+            title, 
+            show_type if show_type else None, 
+            release_year, 
+            current_rank, 
+            platform if platform else None, 
+            plot if plot else None, 
+            poster_url if poster_url else None, 
+            creators if creators else None, 
+            stars if stars else None, 
+            play_url if play_url else None, 
+            trailer_url if trailer_url else None, 
+            user_id,
+            show_id
+        ))
+        
+        # Update genres
+        # First, delete existing genres
+        delete_genres_query = "DELETE FROM show_genres WHERE show_id = %s"
+        if is_sqlite:
+            delete_genres_query = delete_genres_query.replace("%s", "?")
+        cursor.execute(delete_genres_query, (show_id,))
+        
+        # Then, insert new genres
+        if isinstance(genres, list) and len(genres) > 0:
+            insert_genre_query = """
+            INSERT INTO show_genres (show_id, genre)
+            VALUES (%s, %s)
+            """
+            if is_sqlite:
+                insert_genre_query = insert_genre_query.replace("%s", "?")
+                
+            from config import normalize_genre
+            for genre in genres:
+                if genre:
+                    clean_genre = normalize_genre(genre.strip())
+                    if clean_genre and clean_genre not in ['Sport', 'Sports']:
+                        try:
+                            cursor.execute(insert_genre_query, (show_id, clean_genre))
+                        except Exception:
+                            # ignore duplicate constraints just in case
+                            pass
+                            
+        conn.commit()
+        conn.close()
+        
+        return jsonify({
+            "message": "Show details updated successfully",
+            "show": {
+                "id": show_id,
+                "title": title,
+                "type": show_type,
+                "release_year": release_year,
+                "current_rank": current_rank,
+                "platform": platform,
+                "plot": plot,
+                "poster_url": poster_url,
+                "creators": creators,
+                "stars": stars,
+                "play_url": play_url,
+                "trailer_url": trailer_url,
+                "genres": genres
+            }
+        }), 200
+    except Exception as e:
+        print(f"Error in admin_update_show_details: {e}")
+        return jsonify({"error": "Failed to update show details", "details": str(e)}), 500
+
