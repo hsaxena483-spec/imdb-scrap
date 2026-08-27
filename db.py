@@ -141,6 +141,7 @@ def get_connection():
         try:
             with conn.cursor() as cur:
                 cur.execute("SET statement_timeout = 30000;")
+            conn.commit()
         except Exception as timeout_err:
             print(f"Warning: Failed to set PostgreSQL statement_timeout: {timeout_err}")
             
