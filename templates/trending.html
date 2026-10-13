@@ -524,15 +524,26 @@
 
         function renderGenreChart(weeks, labels, trends) {
             const ctx = document.getElementById('genreTrendChart').getContext('2d');
+            if (genreTrendChartInstance) genreTrendChartInstance.destroy();
             
-            // Only plot top 6 genres to avoid cluttering
+            // Sort genres by average share
             const sortedLabels = labels.map(label => {
-                const arr = trends[label];
-                const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+                const arr = trends[label] || [];
+                const avg = arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
                 return { label, avg };
-            }).sort((a, b) => b.avg - a.avg).map(item => item.label).slice(0, 6);
+            }).sort((a, b) => b.avg - a.avg).map(item => item.label);
 
-            const datasets = sortedLabels.map((label, idx) => ({
+            const topGenres = sortedLabels.slice(0, 6);
+            const otherGenres = sortedLabels.slice(6);
+
+            // Compute "Others" data for each week so that total for every week is exactly 100.00%
+            const othersData = weeks.map((_, wIdx) => {
+                const topSum = topGenres.reduce((acc, g) => acc + ((trends[g] && trends[g][wIdx]) || 0), 0);
+                const val = +(100.0 - topSum).toFixed(2);
+                return val > 0 ? val : 0;
+            });
+
+            const datasets = topGenres.map((label, idx) => ({
                 label: label,
                 data: trends[label],
                 borderColor: colors[idx % colors.length],
@@ -542,6 +553,20 @@
                 tension: 0.3,
                 pointRadius: 4
             }));
+
+            if (otherGenres.length > 0) {
+                datasets.push({
+                    label: "Others",
+                    data: othersData,
+                    borderColor: "#94a3b8",
+                    borderDash: [5, 5],
+                    backgroundColor: "transparent",
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.3,
+                    pointRadius: 3
+                });
+            }
 
             genreTrendChartInstance = new Chart(ctx, {
                 type: 'line',
@@ -554,6 +579,26 @@
                         legend: {
                             position: 'bottom',
                             labels: { color: '#e5e7eb', boxWidth: 12, font: { family: 'Inter' } }
+                        },
+                        tooltip: {
+                            backgroundColor: "#0f172a",
+                            titleColor: "#ffffff",
+                            bodyColor: "#e5e7eb",
+                            borderColor: "rgba(255, 255, 255, 0.1)",
+                            borderWidth: 1,
+                            padding: 12,
+                            footerColor: "#38bdf8",
+                            footerFont: { weight: "bold", family: "Inter" },
+                            footerMarginTop: 8,
+                            filter: (item) => item.parsed.y > 0,
+                            itemSort: (a, b) => b.parsed.y - a.parsed.y,
+                            callbacks: {
+                                label: (context) => ` ${context.dataset.label}: ${context.parsed.y.toFixed(2)}%`,
+                                footer: (tooltipItems) => {
+                                    const sum = tooltipItems.reduce((acc, item) => acc + item.parsed.y, 0);
+                                    return `Total: ${sum.toFixed(2)}%`;
+                                }
+                            }
                         }
                     },
                     scales: {
@@ -566,7 +611,16 @@
 
         function renderLanguageChart(weeks, labels, trends) {
             const ctx = document.getElementById('languageTrendChart').getContext('2d');
-            const datasets = labels.map((label, idx) => ({
+            if (languageTrendChartInstance) languageTrendChartInstance.destroy();
+
+            // Sort languages by average share
+            const sortedLabels = labels.map(label => {
+                const arr = trends[label] || [];
+                const avg = arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
+                return { label, avg };
+            }).sort((a, b) => b.avg - a.avg).map(item => item.label);
+
+            const datasets = sortedLabels.map((label, idx) => ({
                 label: label,
                 data: trends[label],
                 borderColor: colors[(idx + 2) % colors.length],
@@ -588,6 +642,26 @@
                         legend: {
                             position: 'bottom',
                             labels: { color: '#e5e7eb', boxWidth: 12, font: { family: 'Inter' } }
+                        },
+                        tooltip: {
+                            backgroundColor: "#0f172a",
+                            titleColor: "#ffffff",
+                            bodyColor: "#e5e7eb",
+                            borderColor: "rgba(255, 255, 255, 0.1)",
+                            borderWidth: 1,
+                            padding: 12,
+                            footerColor: "#38bdf8",
+                            footerFont: { weight: "bold", family: "Inter" },
+                            footerMarginTop: 8,
+                            filter: (item) => item.parsed.y > 0,
+                            itemSort: (a, b) => b.parsed.y - a.parsed.y,
+                            callbacks: {
+                                label: (context) => ` ${context.dataset.label}: ${context.parsed.y.toFixed(2)}%`,
+                                footer: (tooltipItems) => {
+                                    const sum = tooltipItems.reduce((acc, item) => acc + item.parsed.y, 0);
+                                    return `Total: ${sum.toFixed(2)}%`;
+                                }
+                            }
                         }
                     },
                     scales: {

@@ -53,7 +53,9 @@ def normalize_platform(name):
     }
     return mapping.get(p, str(name).strip().title())
 
-def normalize_paid_free(val):
+def normalize_paid_free(val, platform=None):
+    if platform and str(platform).strip().lower() in ["hoichoi"]:
+        return "Paid"
     if not val:
         return ""
     v = str(val).strip().lower()
@@ -575,7 +577,7 @@ def cleanup_and_standardize_data(conn, is_sqlite):
         
         clean_platform = normalize_platform(platform) if platform else None
         clean_format = normalize_content_format(content_format) if content_format else None
-        clean_paid_free = normalize_paid_free(paid_free) if paid_free else None
+        clean_paid_free = normalize_paid_free(paid_free, clean_platform) if (paid_free or clean_platform) else None
         clean_content_type = normalize_content_type(content_type) if content_type else None
         clean_languages = normalize_languages(languages) if languages else None
         clean_market = normalize_market(market) if market else "ALL INDIA"
@@ -701,7 +703,7 @@ def cleanup_and_standardize_data(conn, is_sqlite):
         
         clean_platform = normalize_platform(platform) if platform else None
         clean_format = normalize_content_format(content_format) if content_format else None
-        clean_paid_free = normalize_paid_free(paid_free) if paid_free else None
+        clean_paid_free = normalize_paid_free(paid_free, clean_platform) if (paid_free or clean_platform) else None
         clean_content_type = normalize_content_type(content_type) if content_type else None
         clean_market = normalize_market(market) if market else "ALL INDIA"
         

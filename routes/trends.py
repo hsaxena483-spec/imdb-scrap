@@ -514,15 +514,17 @@ def api_platform_analytics():
         plat = r[0]
         pf_type = r[1]
         count = int(r[2])
+        if plat and plat.lower() == 'hoichoi':
+            pf_type = 'Paid'
         if plat not in paid_free_data:
             paid_free_data[plat] = {'Paid': 0, 'Free': 0}
         
         if pf_type in ['Paid', 'Free']:
-            paid_free_data[plat][pf_type] = count
+            paid_free_data[plat][pf_type] += count
         elif pf_type.lower() == 'paid':
-            paid_free_data[plat]['Paid'] = count
+            paid_free_data[plat]['Paid'] += count
         elif pf_type.lower() == 'free':
-            paid_free_data[plat]['Free'] = count
+            paid_free_data[plat]['Free'] += count
             
     paid_free_list = []
     for plat, counts in paid_free_data.items():
@@ -741,14 +743,23 @@ def api_genre_trends():
                     all_genres.add(genre)
                     weekly_genre_shares[week][genre] = weekly_genre_shares[week].get(genre, 0.0) + reach
                     
+    def normalize_to_100(val_dict):
+        total = sum(val_dict.values())
+        if total <= 0:
+            return {k: 0.0 for k in val_dict}
+        res = {k: round((v / total) * 100.0, 2) for k, v in val_dict.items()}
+        diff = round(100.0 - sum(res.values()), 2)
+        if diff != 0:
+            top_k = max(val_dict.keys(), key=lambda k: val_dict[k])
+            res[top_k] = round(res[top_k] + diff, 2)
+        return res
+
     genres_list = sorted(list(all_genres))
     genre_trends = {g: [0.0] * len(genre_weeks) for g in genres_list}
     for w_idx, week in enumerate(genre_weeks):
-        total_week_reach = sum(weekly_genre_shares[week].values())
-        if total_week_reach > 0:
-            for genre in genres_list:
-                share_pct = (weekly_genre_shares[week].get(genre, 0.0) / total_week_reach) * 100
-                genre_trends[genre][w_idx] = round(share_pct, 2)
+        norm_map = normalize_to_100({g: weekly_genre_shares[week].get(g, 0.0) for g in genres_list})
+        for genre in genres_list:
+            genre_trends[genre][w_idx] = norm_map[genre]
 
     show_langs_by_week = {}
     lang_weeks_set = set()
@@ -780,11 +791,9 @@ def api_genre_trends():
     langs_list = sorted(list(all_langs))
     lang_trends = {l: [0.0] * len(lang_weeks) for l in langs_list}
     for w_idx, week in enumerate(lang_weeks):
-        total_week_reach = sum(weekly_lang_shares[week].values())
-        if total_week_reach > 0:
-            for lang in langs_list:
-                share_pct = (weekly_lang_shares[week].get(lang, 0.0) / total_week_reach) * 100
-                lang_trends[lang][w_idx] = round(share_pct, 2)
+        norm_map = normalize_to_100({l: weekly_lang_shares[week].get(l, 0.0) for l in langs_list})
+        for lang in langs_list:
+            lang_trends[lang][w_idx] = norm_map[lang]
                 
     return jsonify({
         'genres': {
