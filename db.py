@@ -216,6 +216,16 @@ def init_db():
             play_url VARCHAR(500),
             trailer_url VARCHAR(500),
             total_time_spent NUMERIC(15, 5),
+            f_under_18 NUMERIC(15, 5),
+            f_18_24 NUMERIC(15, 5),
+            f_25_35 NUMERIC(15, 5),
+            f_35_plus NUMERIC(15, 5),
+            m_under_18 NUMERIC(15, 5),
+            m_18_24 NUMERIC(15, 5),
+            m_25_35 NUMERIC(15, 5),
+            m_35_plus NUMERIC(15, 5),
+            female NUMERIC(15, 5),
+            male NUMERIC(15, 5),
             updated_by VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -257,6 +267,20 @@ def init_db():
         except Exception as alter_err:
             # Ignored if column already exists
             print(f"total_time_spent column not added (may already exist): {alter_err}")
+
+        # Alter table to add demographic columns to shows if database already exists
+        demographic_cols = [
+            "f_under_18", "f_18_24", "f_25_35", "f_35_plus",
+            "m_under_18", "m_18_24", "m_25_35", "m_35_plus",
+            "female", "male"
+        ]
+        for col_name in demographic_cols:
+            try:
+                execute_query(conn, is_sqlite, f"ALTER TABLE shows ADD COLUMN {col_name} NUMERIC(15, 5)")
+                conn.commit()
+                print(f"Successfully added {col_name} column to shows table")
+            except Exception as alter_err:
+                print(f"{col_name} column not added to shows (may already exist): {alter_err}")
         
         # 2. Create show_genres table
         print("Creating table: show_genres...")
@@ -325,6 +349,16 @@ def init_db():
             content_type VARCHAR(50),
             market VARCHAR(50),
             total_time_spent NUMERIC(15, 5),
+            f_under_18 NUMERIC(15, 5),
+            f_18_24 NUMERIC(15, 5),
+            f_25_35 NUMERIC(15, 5),
+            f_35_plus NUMERIC(15, 5),
+            m_under_18 NUMERIC(15, 5),
+            m_18_24 NUMERIC(15, 5),
+            m_25_35 NUMERIC(15, 5),
+            m_35_plus NUMERIC(15, 5),
+            female NUMERIC(15, 5),
+            male NUMERIC(15, 5),
             PRIMARY KEY (show_id, week)
         );
         """)
@@ -337,6 +371,15 @@ def init_db():
         except Exception as alter_err:
             # Ignored if column already exists
             print(f"total_time_spent column not added to show_weekly_rankings (may already exist): {alter_err}")
+
+        # Alter table to add demographic columns to show_weekly_rankings if database already exists
+        for col_name in demographic_cols:
+            try:
+                execute_query(conn, is_sqlite, f"ALTER TABLE show_weekly_rankings ADD COLUMN {col_name} NUMERIC(15, 5)")
+                conn.commit()
+                print(f"Successfully added {col_name} column to show_weekly_rankings table")
+            except Exception as alter_err:
+                print(f"{col_name} column not added to show_weekly_rankings (may already exist): {alter_err}")
 
         # 7. Create users table
         print("Creating table: users...")
@@ -668,9 +711,13 @@ def save_show(conn, is_sqlite, show_data):
         id, title, type, release_year, end_year, global_rating, global_vote_count,
         runtime_seconds, certificate, plot, poster_url, release_date, total_episodes,
         creators, stars, current_rank, platform, content_format, paid_free,
-        content_type, languages, reach, week, market, total_time_spent, updated_at
+        content_type, languages, reach, week, market, total_time_spent,
+        f_under_18, f_18_24, f_25_35, f_35_plus,
+        m_under_18, m_18_24, m_25_35, m_35_plus,
+        female, male, updated_at
     ) VALUES (
-        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP
     ) ON CONFLICT (id) DO UPDATE SET
         title = EXCLUDED.title,
         type = EXCLUDED.type,
@@ -695,7 +742,17 @@ def save_show(conn, is_sqlite, show_data):
         reach = EXCLUDED.reach,
         week = EXCLUDED.week,
         market = EXCLUDED.market,
-        total_time_spent = EXCLUDED.total_time_spent,
+        total_time_spent = COALESCE(EXCLUDED.total_time_spent, shows.total_time_spent),
+        f_under_18 = COALESCE(EXCLUDED.f_under_18, shows.f_under_18),
+        f_18_24 = COALESCE(EXCLUDED.f_18_24, shows.f_18_24),
+        f_25_35 = COALESCE(EXCLUDED.f_25_35, shows.f_25_35),
+        f_35_plus = COALESCE(EXCLUDED.f_35_plus, shows.f_35_plus),
+        m_under_18 = COALESCE(EXCLUDED.m_under_18, shows.m_under_18),
+        m_18_24 = COALESCE(EXCLUDED.m_18_24, shows.m_18_24),
+        m_25_35 = COALESCE(EXCLUDED.m_25_35, shows.m_25_35),
+        m_35_plus = COALESCE(EXCLUDED.m_35_plus, shows.m_35_plus),
+        female = COALESCE(EXCLUDED.female, shows.female),
+        male = COALESCE(EXCLUDED.male, shows.male),
         updated_at = CURRENT_TIMESTAMP;
     """
     params = (
@@ -723,7 +780,17 @@ def save_show(conn, is_sqlite, show_data):
         show_data.get('reach'),
         show_data.get('week'),
         normalize_market(show_data.get('market')) if show_data.get('market') else "ALL INDIA",
-        show_data.get('total_time_spent')
+        show_data.get('total_time_spent'),
+        show_data.get('f_under_18'),
+        show_data.get('f_18_24'),
+        show_data.get('f_25_35'),
+        show_data.get('f_35_plus'),
+        show_data.get('m_under_18'),
+        show_data.get('m_18_24'),
+        show_data.get('m_25_35'),
+        show_data.get('m_35_plus'),
+        show_data.get('female'),
+        show_data.get('male')
     )
     execute_query(conn, is_sqlite, query, params)
 
@@ -845,8 +912,12 @@ def save_weekly_ranking(conn, is_sqlite, ranking_data):
     """
     query = """
     INSERT INTO show_weekly_rankings (
-        show_id, week, current_rank, reach, platform, content_format, paid_free, content_type, market, total_time_spent
+        show_id, week, current_rank, reach, platform, content_format, paid_free, content_type, market, total_time_spent,
+        f_under_18, f_18_24, f_25_35, f_35_plus,
+        m_under_18, m_18_24, m_25_35, m_35_plus,
+        female, male
     ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
         %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
     ) ON CONFLICT (show_id, week) DO UPDATE SET
         current_rank = EXCLUDED.current_rank,
@@ -856,7 +927,17 @@ def save_weekly_ranking(conn, is_sqlite, ranking_data):
         paid_free = EXCLUDED.paid_free,
         content_type = EXCLUDED.content_type,
         market = EXCLUDED.market,
-        total_time_spent = EXCLUDED.total_time_spent;
+        total_time_spent = COALESCE(EXCLUDED.total_time_spent, show_weekly_rankings.total_time_spent),
+        f_under_18 = COALESCE(EXCLUDED.f_under_18, show_weekly_rankings.f_under_18),
+        f_18_24 = COALESCE(EXCLUDED.f_18_24, show_weekly_rankings.f_18_24),
+        f_25_35 = COALESCE(EXCLUDED.f_25_35, show_weekly_rankings.f_25_35),
+        f_35_plus = COALESCE(EXCLUDED.f_35_plus, show_weekly_rankings.f_35_plus),
+        m_under_18 = COALESCE(EXCLUDED.m_under_18, show_weekly_rankings.m_under_18),
+        m_18_24 = COALESCE(EXCLUDED.m_18_24, show_weekly_rankings.m_18_24),
+        m_25_35 = COALESCE(EXCLUDED.m_25_35, show_weekly_rankings.m_25_35),
+        m_35_plus = COALESCE(EXCLUDED.m_35_plus, show_weekly_rankings.m_35_plus),
+        female = COALESCE(EXCLUDED.female, show_weekly_rankings.female),
+        male = COALESCE(EXCLUDED.male, show_weekly_rankings.male);
     """
     params = (
         ranking_data.get('show_id'),
@@ -868,7 +949,17 @@ def save_weekly_ranking(conn, is_sqlite, ranking_data):
         normalize_paid_free(ranking_data.get('paid_free')) if ranking_data.get('paid_free') else None,
         normalize_content_type(ranking_data.get('content_type')) if ranking_data.get('content_type') else None,
         normalize_market(ranking_data.get('market')) if ranking_data.get('market') else "ALL INDIA",
-        ranking_data.get('total_time_spent')
+        ranking_data.get('total_time_spent'),
+        ranking_data.get('f_under_18'),
+        ranking_data.get('f_18_24'),
+        ranking_data.get('f_25_35'),
+        ranking_data.get('f_35_plus'),
+        ranking_data.get('m_under_18'),
+        ranking_data.get('m_18_24'),
+        ranking_data.get('m_25_35'),
+        ranking_data.get('m_35_plus'),
+        ranking_data.get('female'),
+        ranking_data.get('male')
     )
     execute_query(conn, is_sqlite, query, params)
 

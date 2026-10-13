@@ -153,8 +153,10 @@ def index():
     shows_query = f"""
         SELECT s.id, s.title, s.type, s.release_year, s.end_year, s.global_rating, s.global_vote_count, 
                s.runtime_seconds, s.certificate, s.plot, s.poster_url, s.current_rank, s.creators, s.stars,
-               s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
-        FROM shows s
+               s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market,
+               s.total_time_spent, s.f_under_18, s.f_18_24, s.f_25_35, s.f_35_plus,
+               s.m_under_18, s.m_18_24, s.m_25_35, s.m_35_plus, s.female, s.male
+    FROM shows s
         WHERE {where_sql}
         ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.reach DESC NULLS LAST
         LIMIT %s OFFSET %s
@@ -162,6 +164,7 @@ def index():
     all_params = list(params) + [per_page, offset]
     shows_rows, shows_cols = get_db_data(shows_query, tuple(all_params))
     
+    float_cols = ('total_time_spent', 'f_under_18', 'f_18_24', 'f_25_35', 'f_35_plus', 'm_under_18', 'm_18_24', 'm_25_35', 'm_35_plus', 'female', 'male')
     shows = []
     for idx, row in enumerate(shows_rows):
         show = dict(zip(shows_cols, row))
@@ -169,6 +172,9 @@ def index():
             show['global_rating'] = float(show['global_rating'])
         if show['reach'] is not None:
             show['reach'] = round(float(show['reach']), 2)
+        for fc in float_cols:
+            if show.get(fc) is not None:
+                show[fc] = round(float(show[fc]), 2)
         show['display_rank'] = offset + idx + 1
         shows.append(show)
         
@@ -306,7 +312,9 @@ def show_detail(show_id):
     show_rows, show_cols = get_db_data("""
         SELECT id, title, type, release_year, end_year, global_rating, global_vote_count, 
                runtime_seconds, certificate, plot, poster_url, current_rank, creators, stars,
-               platform, content_format, paid_free, content_type, languages, reach, week, market
+               platform, content_format, paid_free, content_type, languages, reach, week, market,
+               total_time_spent, f_under_18, f_18_24, f_25_35, f_35_plus,
+               m_under_18, m_18_24, m_25_35, m_35_plus, female, male
         FROM shows 
         WHERE id = %s
     """, (show_id,))
@@ -319,6 +327,9 @@ def show_detail(show_id):
         show['global_rating'] = float(show['global_rating'])
     if show['reach'] is not None:
         show['reach'] = round(float(show['reach']), 2)
+    for fc in ('total_time_spent', 'f_under_18', 'f_18_24', 'f_25_35', 'f_35_plus', 'm_under_18', 'm_18_24', 'm_25_35', 'm_35_plus', 'female', 'male'):
+        if show.get(fc) is not None:
+            show[fc] = round(float(show[fc]), 2)
         
     # Fetch genres
     genre_rows, _ = get_db_data("SELECT genre FROM show_genres WHERE show_id = %s", (show_id,))
@@ -357,7 +368,10 @@ def show_detail(show_id):
         
     # Fetch weekly ranking history sorted chronologically
     history_rows, _ = get_db_data("""
-        SELECT week, current_rank, reach 
+        SELECT week, current_rank, reach, total_time_spent,
+               f_under_18, f_18_24, f_25_35, f_35_plus,
+               m_under_18, m_18_24, m_25_35, m_35_plus,
+               female, male
         FROM show_weekly_rankings 
         WHERE show_id = %s 
         ORDER BY week ASC
@@ -377,7 +391,18 @@ def show_detail(show_id):
         weekly_history.append({
             'week': r[0],
             'rank': int(r[1]) if r[1] is not None else None,
-            'reach': round(float(r[2]), 2) if r[2] is not None else 0.0
+            'reach': round(float(r[2]), 2) if r[2] is not None else 0.0,
+            'total_time_spent': round(float(r[3]), 2) if r[3] is not None else None,
+            'f_under_18': round(float(r[4]), 2) if r[4] is not None else None,
+            'f_18_24': round(float(r[5]), 2) if r[5] is not None else None,
+            'f_25_35': round(float(r[6]), 2) if r[6] is not None else None,
+            'f_35_plus': round(float(r[7]), 2) if r[7] is not None else None,
+            'm_under_18': round(float(r[8]), 2) if r[8] is not None else None,
+            'm_18_24': round(float(r[9]), 2) if r[9] is not None else None,
+            'm_25_35': round(float(r[10]), 2) if r[10] is not None else None,
+            'm_35_plus': round(float(r[11]), 2) if r[11] is not None else None,
+            'female': round(float(r[12]), 2) if r[12] is not None else None,
+            'male': round(float(r[13]), 2) if r[13] is not None else None,
         })
         
     word_cloud = compute_word_cloud(reviews)
@@ -500,7 +525,9 @@ def api_shows_json():
     shows_query = f"""
         SELECT s.id, s.title, s.type, s.release_year, s.end_year, s.global_rating, s.global_vote_count, 
                s.runtime_seconds, s.certificate, s.plot, s.poster_url, s.current_rank, s.creators, s.stars,
-               s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market
+               s.platform, s.content_format, s.paid_free, s.content_type, s.languages, s.reach, s.week, s.market,
+               s.total_time_spent, s.f_under_18, s.f_18_24, s.f_25_35, s.f_35_plus,
+               s.m_under_18, s.m_18_24, s.m_25_35, s.m_35_plus, s.female, s.male
         FROM shows s
         WHERE {where_sql}
         ORDER BY SUBSTR(s.week, 8, 4) DESC, SUBSTR(s.week, 4, 2) DESC, s.reach DESC NULLS LAST
@@ -509,6 +536,7 @@ def api_shows_json():
     all_params = list(params) + [per_page, offset]
     shows_rows, shows_cols = get_db_data(shows_query, tuple(all_params))
     
+    float_cols = ('total_time_spent', 'f_under_18', 'f_18_24', 'f_25_35', 'f_35_plus', 'm_under_18', 'm_18_24', 'm_25_35', 'm_35_plus', 'female', 'male')
     shows = []
     for idx, row in enumerate(shows_rows):
         show = dict(zip(shows_cols, row))
@@ -516,6 +544,9 @@ def api_shows_json():
             show['global_rating'] = float(show['global_rating'])
         if show['reach'] is not None:
             show['reach'] = round(float(show['reach']), 2)
+        for fc in float_cols:
+            if show.get(fc) is not None:
+                show[fc] = round(float(show[fc]), 2)
         show['display_rank'] = offset + idx + 1
         shows.append(show)
         
@@ -620,7 +651,9 @@ def api_show_detail_json(show_id):
         SELECT id, title, type, release_year, end_year, global_rating, global_vote_count, 
                runtime_seconds, certificate, plot, poster_url, current_rank, creators, stars,
                platform, content_format, paid_free, content_type, languages, reach, week, market,
-               play_url, trailer_url
+               play_url, trailer_url,
+               total_time_spent, f_under_18, f_18_24, f_25_35, f_35_plus,
+               m_under_18, m_18_24, m_25_35, m_35_plus, female, male
         FROM shows 
         WHERE id = %s
     """, (show_id,))
@@ -633,6 +666,9 @@ def api_show_detail_json(show_id):
         show['global_rating'] = float(show['global_rating'])
     if show['reach'] is not None:
         show['reach'] = round(float(show['reach']), 2)
+    for fc in ('total_time_spent', 'f_under_18', 'f_18_24', 'f_25_35', 'f_35_plus', 'm_under_18', 'm_18_24', 'm_25_35', 'm_35_plus', 'female', 'male'):
+        if show.get(fc) is not None:
+            show[fc] = round(float(show[fc]), 2)
         
     # Fetch genres
     genre_rows, _ = get_db_data("SELECT genre FROM show_genres WHERE show_id = %s", (show_id,))
@@ -671,7 +707,10 @@ def api_show_detail_json(show_id):
         
     # Fetch weekly ranking history
     history_rows, _ = get_db_data("""
-        SELECT week, current_rank, reach 
+        SELECT week, current_rank, reach, total_time_spent,
+               f_under_18, f_18_24, f_25_35, f_35_plus,
+               m_under_18, m_18_24, m_25_35, m_35_plus,
+               female, male
         FROM show_weekly_rankings 
         WHERE show_id = %s 
         ORDER BY week ASC
@@ -691,7 +730,18 @@ def api_show_detail_json(show_id):
         weekly_history.append({
             'week': r[0],
             'rank': int(r[1]) if r[1] is not None else None,
-            'reach': round(float(r[2]), 2) if r[2] is not None else 0.0
+            'reach': round(float(r[2]), 2) if r[2] is not None else 0.0,
+            'total_time_spent': round(float(r[3]), 2) if r[3] is not None else None,
+            'f_under_18': round(float(r[4]), 2) if r[4] is not None else None,
+            'f_18_24': round(float(r[5]), 2) if r[5] is not None else None,
+            'f_25_35': round(float(r[6]), 2) if r[6] is not None else None,
+            'f_35_plus': round(float(r[7]), 2) if r[7] is not None else None,
+            'm_under_18': round(float(r[8]), 2) if r[8] is not None else None,
+            'm_18_24': round(float(r[9]), 2) if r[9] is not None else None,
+            'm_25_35': round(float(r[10]), 2) if r[10] is not None else None,
+            'm_35_plus': round(float(r[11]), 2) if r[11] is not None else None,
+            'female': round(float(r[12]), 2) if r[12] is not None else None,
+            'male': round(float(r[13]), 2) if r[13] is not None else None,
         })
         
     word_cloud = compute_word_cloud(reviews)

@@ -382,51 +382,22 @@ def validate_date(date_str):
 def read_excel_shows(filepath):
     """
     Reads show data from Excel file. Returns (shows_list, platform_gender_list).
-    Excel has headers at row 6: Week, MARKET, Platform, Content format, PAID/FREE, Content Type, Shows/Live Content, Language, Genre, Release Date, Rank, Reach
+    Excel has headers at row 6 or row 7: Week, MARKET, Platform, Content format, PAID/FREE, Content Type, Shows/Live Content, Language, Genre, Release Date, Rank, [F <18 .. Male], Reach, [Total Time Spent]
     Platform gender data starts at row 60.
     """
     wb = openpyxl.load_workbook(filepath, data_only=True)
     ws = wb[wb.sheetnames[0]]  # Use first sheet
-    
-    # Save metadata (week/time period and market) to metadata.json
-    time_period = ws.cell(row=1, column=6).value
-    market = ws.cell(row=7, column=2).value or "ALL INDIA"
-    if time_period:
-        try:
-            week_val = ws.cell(row=7, column=1).value or "WK-26,2026"
-            week_key = str(week_val).strip().replace(" ", "")
-            
-            existing_meta = {}
-            if os.path.exists("metadata.json"):
-                try:
-                    with open("metadata.json", "r") as f:
-                        loaded = json.load(f)
-                        if isinstance(loaded, dict) and "time_period" not in loaded:
-                            existing_meta = loaded
-                        elif isinstance(loaded, dict) and "time_period" in loaded:
-                            # Convert old single-week format to dict
-                            old_key = "WK-26,2026"
-                            if "WK-27" in loaded["time_period"]:
-                                old_key = "WK-27,2026"
-                            existing_meta = {old_key: loaded}
-                except Exception:
-                    pass
-            
-            # Clean up potential typos (e.g. if the cell text starts with WK-26 when it is actually WK-27)
-            clean_time_period = str(time_period).strip()
-            if "WK-27" in week_key and clean_time_period.startswith("WK-26"):
-                clean_time_period = clean_time_period.replace("WK-26", "WK-27", 1)
-            
-            existing_meta[week_key] = {
-                "time_period": clean_time_period,
-                "market": str(market).strip()
-            }
-            with open("metadata.json", "w") as f:
-                json.dump(existing_meta, f, indent=4)
-            print(f"Saved metadata for {week_key}: {clean_time_period} | {market}")
-        except Exception as e:
-            print(f"Warning: Could not save metadata.json: {e}")
-            
+
+    # Dynamically detect header row (typically row 6 or row 7)
+    header_row = 6
+    for r in range(1, 15):
+        c1 = str(ws.cell(row=r, column=1).value or "").strip().lower()
+        c3 = str(ws.cell(row=r, column=3).value or "").strip().lower()
+        if c1 == "week" or c3 == "platform":
+            header_row = r
+            break
+    data_start_row = header_row + 1
+
     col_map = {
         'week': 1,
         'market': 2,
@@ -440,45 +411,133 @@ def read_excel_shows(filepath):
         'release_date': 10,
         'current_rank': 11,
         'reach': 12,
-        'total_time_spent': None
+        'total_time_spent': None,
+        'f_under_18': None,
+        'f_18_24': None,
+        'f_25_35': None,
+        'f_35_plus': None,
+        'm_under_18': None,
+        'm_18_24': None,
+        'm_25_35': None,
+        'm_35_plus': None,
+        'female': None,
+        'male': None
     }
     
-    # Try dynamically mapping columns based on row 6 headers
+    # Dynamically map columns based on detected header_row
     for col in range(1, ws.max_column + 1):
-        header_val = ws.cell(row=6, column=col).value
+        header_val = ws.cell(row=header_row, column=col).value
         if not header_val:
             continue
         h_str = str(header_val).strip().lower()
-        if "week" in h_str:
+        # Normalize en-dash / em-dash to hyphen and collapse whitespace
+        h_norm = " ".join(h_str.replace('\u2013', '-').replace('\u2014', '-').split())
+        if h_norm == "week" or "week" in h_norm:
             col_map['week'] = col
-        elif "market" in h_str:
+        elif "market" in h_norm:
             col_map['market'] = col
-        elif "platform" in h_str:
+        elif "platform" in h_norm:
             col_map['platform'] = col
-        elif "content format" in h_str:
+        elif "content format" in h_norm:
             col_map['content_format'] = col
-        elif "paid/free" in h_str or "paid_free" in h_str:
+        elif "paid/free" in h_norm or "paid_free" in h_norm:
             col_map['paid_free'] = col
-        elif "content type" in h_str:
+        elif "content type" in h_norm:
             col_map['content_type'] = col
-        elif "shows/live content" in h_str or h_str == "shows" or h_str == "title":
+        elif "shows/live content" in h_norm or h_norm in ("shows", "title"):
             col_map['title'] = col
-        elif "language" in h_str:
+        elif "language" in h_norm:
             col_map['language'] = col
-        elif "genre" in h_str:
+        elif "genre" in h_norm:
             col_map['genre'] = col
-        elif "release date" in h_str:
+        elif "release date" in h_norm:
             col_map['release_date'] = col
-        elif "rank" in h_str:
+        elif "rank" in h_norm:
             col_map['current_rank'] = col
-        elif "reach" in h_str:
+        elif h_norm in ("f <18", "f<18", "female <18"):
+            col_map['f_under_18'] = col
+        elif h_norm in ("f 18-24", "f18-24", "female 18-24"):
+            col_map['f_18_24'] = col
+        elif h_norm in ("f 25-35", "f25-35", "female 25-35"):
+            col_map['f_25_35'] = col
+        elif h_norm in ("f 35+", "f35+", "female 35+"):
+            col_map['f_35_plus'] = col
+        elif h_norm in ("m <18", "m<18", "male <18"):
+            col_map['m_under_18'] = col
+        elif h_norm in ("m 18-24", "m18-24", "male 18-24"):
+            col_map['m_18_24'] = col
+        elif h_norm in ("m 25-35", "m25-35", "male 25-35"):
+            col_map['m_25_35'] = col
+        elif h_norm in ("m 35+", "m35+", "male 35+"):
+            col_map['m_35_plus'] = col
+        elif h_norm in ("female", "female reach"):
+            col_map['female'] = col
+        elif h_norm in ("male", "male reach"):
+            col_map['male'] = col
+        elif "reach" in h_norm:
             col_map['reach'] = col
-        elif "time spent" in h_str or "total time spent" in h_str:
+        elif "time spent" in h_norm or "total time spent" in h_norm:
             col_map['total_time_spent'] = col
 
+    # Save metadata (week/time period and market) to metadata.json
+    time_period = ws.cell(row=1, column=6).value
+    market = ws.cell(row=data_start_row, column=col_map['market']).value or "ALL INDIA"
+    if time_period:
+        try:
+            week_val = ws.cell(row=data_start_row, column=col_map['week']).value or "WK-26,2026"
+            week_key = str(week_val).strip().replace(" ", "")
+            meta_filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.json")
+            
+            existing_meta = {}
+            if os.path.exists(meta_filepath):
+                try:
+                    with open(meta_filepath, "r") as f:
+                        loaded = json.load(f)
+                        if isinstance(loaded, dict) and "time_period" not in loaded:
+                            existing_meta = loaded
+                        elif isinstance(loaded, dict) and "time_period" in loaded:
+                            # Convert old single-week format to dict
+                            old_key = "WK-26,2026"
+                            if "WK-27" in loaded["time_period"]:
+                                old_key = "WK-27,2026"
+                            existing_meta = {old_key: loaded}
+                except Exception:
+                    pass
+            
+            # Remove any bogus "Week" key from header misreads
+            existing_meta.pop("Week", None)
+            
+            # Clean up potential typos (e.g. if the cell text starts with WK-26 when it is actually WK-27)
+            clean_time_period = str(time_period).strip()
+            if "WK-27" in week_key and clean_time_period.startswith("WK-26"):
+                clean_time_period = clean_time_period.replace("WK-26", "WK-27", 1)
+            
+            if week_key.lower() != "week":
+                existing_meta[week_key] = {
+                    "time_period": clean_time_period,
+                    "market": str(market).strip()
+                }
+                with open(meta_filepath, "w") as f:
+                    json.dump(existing_meta, f, indent=4)
+                print(f"Saved metadata for {week_key}: {clean_time_period} | {market}")
+        except Exception as e:
+            print(f"Warning: Could not save metadata.json: {e}")
+
+    def parse_float_col(row_idx, col_key):
+        col_idx = col_map.get(col_key)
+        if not col_idx:
+            return None
+        val = ws.cell(row=row_idx, column=col_idx).value
+        if val is not None:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return None
+        return None
+
     shows = []
-    # Data rows start at row 7
-    for row in range(7, ws.max_row + 1):
+    # Data rows start at data_start_row
+    for row in range(data_start_row, ws.max_row + 1):
         # Stop show loop if we reach the platform gender section header/content
         if row >= 60:
             val_col1 = str(ws.cell(row=row, column=1).value or "").strip().upper()
@@ -502,20 +561,22 @@ def read_excel_shows(filepath):
         release_date = validate_date(release_date)
         
         genres_str = ws.cell(row=row, column=col_map['genre']).value or ""
-        genres = [g.strip() for g in genres_str.split(',') if g.strip()]
+        genres = [g.strip() for g in str(genres_str).split(',') if g.strip()]
         
-        total_time_spent = None
-        if col_map['total_time_spent']:
-            spent_val = ws.cell(row=row, column=col_map['total_time_spent']).value
-            if spent_val is not None:
-                try:
-                    total_time_spent = float(spent_val)
-                except (ValueError, TypeError):
-                    pass
+        raw_week = ws.cell(row=row, column=col_map['week']).value
+        clean_week = str(raw_week).strip() if raw_week is not None else None
+        
+        raw_rank = ws.cell(row=row, column=col_map['current_rank']).value
+        clean_rank = None
+        if raw_rank is not None:
+            try:
+                clean_rank = int(float(raw_rank))
+            except (ValueError, TypeError):
+                clean_rank = None
         
         show = {
             'title': str(title).strip(),
-            'week': ws.cell(row=row, column=col_map['week']).value,
+            'week': clean_week,
             'market': ws.cell(row=row, column=col_map['market']).value,
             'platform': ws.cell(row=row, column=col_map['platform']).value,
             'content_format': ws.cell(row=row, column=col_map['content_format']).value,
@@ -524,9 +585,19 @@ def read_excel_shows(filepath):
             'languages': ws.cell(row=row, column=col_map['language']).value,
             'genres': genres,
             'release_date': release_date,
-            'current_rank': ws.cell(row=row, column=col_map['current_rank']).value,
-            'reach': ws.cell(row=row, column=col_map['reach']).value,
-            'total_time_spent': total_time_spent
+            'current_rank': clean_rank,
+            'reach': parse_float_col(row, 'reach'),
+            'total_time_spent': parse_float_col(row, 'total_time_spent'),
+            'f_under_18': parse_float_col(row, 'f_under_18'),
+            'f_18_24': parse_float_col(row, 'f_18_24'),
+            'f_25_35': parse_float_col(row, 'f_25_35'),
+            'f_35_plus': parse_float_col(row, 'f_35_plus'),
+            'm_under_18': parse_float_col(row, 'm_under_18'),
+            'm_18_24': parse_float_col(row, 'm_18_24'),
+            'm_25_35': parse_float_col(row, 'm_25_35'),
+            'm_35_plus': parse_float_col(row, 'm_35_plus'),
+            'female': parse_float_col(row, 'female'),
+            'male': parse_float_col(row, 'male')
         }
         shows.append(show)
     
@@ -709,15 +780,13 @@ def main():
             try:
                 wb = openpyxl.load_workbook(filepath, read_only=True)
                 ws = wb[wb.sheetnames[0]]
-                # Try to find week code in data cells first (row 7 column 1)
-                week_code = ws.cell(row=7, column=1).value
-                if not week_code:
-                    # Try searching rows 7 to 15
-                    for r in range(7, 15):
-                        val = ws.cell(row=r, column=1).value
-                        if val:
-                            week_code = val
-                            break
+                # Try to find week code in data cells (rows 7 to 15, skipping 'week' header)
+                week_code = None
+                for r in range(7, 15):
+                    val = ws.cell(row=r, column=1).value
+                    if val and str(val).strip().lower() != "week":
+                        week_code = val
+                        break
                 # If still not found, try sheet title or metadata cell (1, 6)
                 if not week_code:
                     week_code = ws.cell(row=1, column=6).value
@@ -765,7 +834,12 @@ def main():
                     wb_meta = openpyxl.load_workbook(filepath, data_only=True)
                     ws_meta = wb_meta[wb_meta.sheetnames[0]]
                     time_period = ws_meta.cell(row=1, column=6).value
-                    market = ws_meta.cell(row=7, column=2).value or "ALL INDIA"
+                    market = "ALL INDIA"
+                    for r in range(7, 15):
+                        m_val = ws_meta.cell(row=r, column=2).value
+                        if m_val and str(m_val).strip().lower() != "market":
+                            market = m_val
+                            break
                     if time_period:
                         latest_time_period = str(time_period).strip()
                     if market:
@@ -935,6 +1009,17 @@ def main():
                                 'reach': excel_show.get('reach'),
                                 'week': excel_show.get('week'),
                                 'market': excel_show.get('market'),
+                                'total_time_spent': excel_show.get('total_time_spent'),
+                                'f_under_18': excel_show.get('f_under_18'),
+                                'f_18_24': excel_show.get('f_18_24'),
+                                'f_25_35': excel_show.get('f_25_35'),
+                                'f_35_plus': excel_show.get('f_35_plus'),
+                                'm_under_18': excel_show.get('m_under_18'),
+                                'm_18_24': excel_show.get('m_18_24'),
+                                'm_25_35': excel_show.get('m_25_35'),
+                                'm_35_plus': excel_show.get('m_35_plus'),
+                                'female': excel_show.get('female'),
+                                'male': excel_show.get('male'),
                             }
                             try:
                                 db.save_show(conn, is_sqlite, show_data)
@@ -976,6 +1061,17 @@ def main():
                                 'reach': excel_show.get('reach'),
                                 'week': excel_show.get('week'),
                                 'market': excel_show.get('market'),
+                                'total_time_spent': excel_show.get('total_time_spent'),
+                                'f_under_18': excel_show.get('f_under_18'),
+                                'f_18_24': excel_show.get('f_18_24'),
+                                'f_25_35': excel_show.get('f_25_35'),
+                                'f_35_plus': excel_show.get('f_35_plus'),
+                                'm_under_18': excel_show.get('m_under_18'),
+                                'm_18_24': excel_show.get('m_18_24'),
+                                'm_25_35': excel_show.get('m_25_35'),
+                                'm_35_plus': excel_show.get('m_35_plus'),
+                                'female': excel_show.get('female'),
+                                'male': excel_show.get('male'),
                             }
                             try:
                                 db.save_show(conn, is_sqlite, show_data)
@@ -996,7 +1092,18 @@ def main():
                         'content_format': excel_show.get('content_format'),
                         'paid_free': excel_show.get('paid_free'),
                         'content_type': excel_show.get('content_type'),
-                        'market': excel_show.get('market')
+                        'market': excel_show.get('market'),
+                        'total_time_spent': excel_show.get('total_time_spent'),
+                        'f_under_18': excel_show.get('f_under_18'),
+                        'f_18_24': excel_show.get('f_18_24'),
+                        'f_25_35': excel_show.get('f_25_35'),
+                        'f_35_plus': excel_show.get('f_35_plus'),
+                        'm_under_18': excel_show.get('m_under_18'),
+                        'm_18_24': excel_show.get('m_18_24'),
+                        'm_25_35': excel_show.get('m_25_35'),
+                        'm_35_plus': excel_show.get('m_35_plus'),
+                        'female': excel_show.get('female'),
+                        'male': excel_show.get('male')
                     }
                     try:
                         db.save_weekly_ranking(conn, is_sqlite, weekly_ranking)
@@ -1005,7 +1112,18 @@ def main():
                         update_query = """
                         UPDATE shows SET 
                             current_rank = %s, reach = %s, week = %s, platform = %s,
-                            content_format = %s, paid_free = %s, content_type = %s, market = %s
+                            content_format = %s, paid_free = %s, content_type = %s, market = %s,
+                            total_time_spent = COALESCE(%s, total_time_spent),
+                            f_under_18 = COALESCE(%s, f_under_18),
+                            f_18_24 = COALESCE(%s, f_18_24),
+                            f_25_35 = COALESCE(%s, f_25_35),
+                            f_35_plus = COALESCE(%s, f_35_plus),
+                            m_under_18 = COALESCE(%s, m_under_18),
+                            m_18_24 = COALESCE(%s, m_18_24),
+                            m_25_35 = COALESCE(%s, m_25_35),
+                            m_35_plus = COALESCE(%s, m_35_plus),
+                            female = COALESCE(%s, female),
+                            male = COALESCE(%s, male)
                         WHERE id = %s
                         """
                         if is_sqlite:
@@ -1020,6 +1138,17 @@ def main():
                             db.normalize_paid_free(excel_show.get('paid_free')) if excel_show.get('paid_free') else None,
                             db.normalize_content_type(excel_show.get('content_type')) if excel_show.get('content_type') else None,
                             db.normalize_market(excel_show.get('market')) if excel_show.get('market') else "ALL INDIA",
+                            excel_show.get('total_time_spent'),
+                            excel_show.get('f_under_18'),
+                            excel_show.get('f_18_24'),
+                            excel_show.get('f_25_35'),
+                            excel_show.get('f_35_plus'),
+                            excel_show.get('m_under_18'),
+                            excel_show.get('m_18_24'),
+                            excel_show.get('m_25_35'),
+                            excel_show.get('m_35_plus'),
+                            excel_show.get('female'),
+                            excel_show.get('male'),
                             show_id
                         ))
                         conn.commit()
@@ -1163,16 +1292,20 @@ def process_excel_file(filepath, job_id=None):
         wb_meta = openpyxl.load_workbook(filepath, data_only=True)
         ws_meta = wb_meta[wb_meta.sheetnames[0]]
         time_period = ws_meta.cell(row=1, column=6).value
-        market = ws_meta.cell(row=7, column=2).value or "ALL INDIA"
+        market = "ALL INDIA"
+        for r in range(7, 15):
+            m_val = ws_meta.cell(row=r, column=2).value
+            if m_val and str(m_val).strip().lower() != "market":
+                market = m_val
+                break
         
-        # Read week code
-        week_code = ws_meta.cell(row=7, column=1).value
-        if not week_code:
-            for r in range(7, 15):
-                val = ws_meta.cell(row=r, column=1).value
-                if val:
-                    week_code = val
-                    break
+        # Read week code (skip 'week' header if headers are on row 7)
+        week_code = None
+        for r in range(7, 15):
+            val = ws_meta.cell(row=r, column=1).value
+            if val and str(val).strip().lower() != "week":
+                week_code = val
+                break
         if not week_code:
             week_code = time_period
         if not week_code:
@@ -1343,7 +1476,17 @@ def process_excel_file(filepath, job_id=None):
                             'reach': excel_show.get('reach'),
                             'week': excel_show.get('week'),
                             'market': excel_show.get('market'),
-                            'total_time_spent': excel_show.get('total_time_spent')
+                            'total_time_spent': excel_show.get('total_time_spent'),
+                            'f_under_18': excel_show.get('f_under_18'),
+                            'f_18_24': excel_show.get('f_18_24'),
+                            'f_25_35': excel_show.get('f_25_35'),
+                            'f_35_plus': excel_show.get('f_35_plus'),
+                            'm_under_18': excel_show.get('m_under_18'),
+                            'm_18_24': excel_show.get('m_18_24'),
+                            'm_25_35': excel_show.get('m_25_35'),
+                            'm_35_plus': excel_show.get('m_35_plus'),
+                            'female': excel_show.get('female'),
+                            'male': excel_show.get('male')
                         }
                         db.save_show(conn, is_sqlite, show_data)
                         all_genres = list(set(excel_show.get('genres', []) + imdb_genres))
@@ -1379,7 +1522,17 @@ def process_excel_file(filepath, job_id=None):
                             'reach': excel_show.get('reach'),
                             'week': excel_show.get('week'),
                             'market': excel_show.get('market'),
-                            'total_time_spent': excel_show.get('total_time_spent')
+                            'total_time_spent': excel_show.get('total_time_spent'),
+                            'f_under_18': excel_show.get('f_under_18'),
+                            'f_18_24': excel_show.get('f_18_24'),
+                            'f_25_35': excel_show.get('f_25_35'),
+                            'f_35_plus': excel_show.get('f_35_plus'),
+                            'm_under_18': excel_show.get('m_under_18'),
+                            'm_18_24': excel_show.get('m_18_24'),
+                            'm_25_35': excel_show.get('m_25_35'),
+                            'm_35_plus': excel_show.get('m_35_plus'),
+                            'female': excel_show.get('female'),
+                            'male': excel_show.get('male')
                         }
                         db.save_show(conn, is_sqlite, show_data)
                         db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
@@ -1419,7 +1572,17 @@ def process_excel_file(filepath, job_id=None):
                         'reach': excel_show.get('reach'),
                         'week': excel_show.get('week'),
                         'market': excel_show.get('market'),
-                        'total_time_spent': excel_show.get('total_time_spent')
+                        'total_time_spent': excel_show.get('total_time_spent'),
+                        'f_under_18': excel_show.get('f_under_18'),
+                        'f_18_24': excel_show.get('f_18_24'),
+                        'f_25_35': excel_show.get('f_25_35'),
+                        'f_35_plus': excel_show.get('f_35_plus'),
+                        'm_under_18': excel_show.get('m_under_18'),
+                        'm_18_24': excel_show.get('m_18_24'),
+                        'm_25_35': excel_show.get('m_25_35'),
+                        'm_35_plus': excel_show.get('m_35_plus'),
+                        'female': excel_show.get('female'),
+                        'male': excel_show.get('male')
                     }
                     db.save_show(conn, is_sqlite, show_data)
                     db.save_genres(conn, is_sqlite, show_id, excel_show.get('genres', []))
@@ -1437,7 +1600,17 @@ def process_excel_file(filepath, job_id=None):
                 'paid_free': excel_show.get('paid_free'),
                 'content_type': excel_show.get('content_type'),
                 'market': excel_show.get('market'),
-                'total_time_spent': excel_show.get('total_time_spent')
+                'total_time_spent': excel_show.get('total_time_spent'),
+                'f_under_18': excel_show.get('f_under_18'),
+                'f_18_24': excel_show.get('f_18_24'),
+                'f_25_35': excel_show.get('f_25_35'),
+                'f_35_plus': excel_show.get('f_35_plus'),
+                'm_under_18': excel_show.get('m_under_18'),
+                'm_18_24': excel_show.get('m_18_24'),
+                'm_25_35': excel_show.get('m_25_35'),
+                'm_35_plus': excel_show.get('m_35_plus'),
+                'female': excel_show.get('female'),
+                'male': excel_show.get('male')
             }
             db.save_weekly_ranking(conn, is_sqlite, weekly_ranking)
             
@@ -1445,7 +1618,17 @@ def process_excel_file(filepath, job_id=None):
             UPDATE shows SET 
                 current_rank = %s, reach = %s, week = %s, platform = %s,
                 content_format = %s, paid_free = %s, content_type = %s, market = %s,
-                total_time_spent = %s
+                total_time_spent = COALESCE(%s, total_time_spent),
+                f_under_18 = COALESCE(%s, f_under_18),
+                f_18_24 = COALESCE(%s, f_18_24),
+                f_25_35 = COALESCE(%s, f_25_35),
+                f_35_plus = COALESCE(%s, f_35_plus),
+                m_under_18 = COALESCE(%s, m_under_18),
+                m_18_24 = COALESCE(%s, m_18_24),
+                m_25_35 = COALESCE(%s, m_25_35),
+                m_35_plus = COALESCE(%s, m_35_plus),
+                female = COALESCE(%s, female),
+                male = COALESCE(%s, male)
             WHERE id = %s
             """
             if is_sqlite:
@@ -1461,6 +1644,16 @@ def process_excel_file(filepath, job_id=None):
                 db.normalize_content_type(excel_show.get('content_type')) if excel_show.get('content_type') else None,
                 db.normalize_market(excel_show.get('market')) if excel_show.get('market') else "ALL INDIA",
                 excel_show.get('total_time_spent'),
+                excel_show.get('f_under_18'),
+                excel_show.get('f_18_24'),
+                excel_show.get('f_25_35'),
+                excel_show.get('f_35_plus'),
+                excel_show.get('m_under_18'),
+                excel_show.get('m_18_24'),
+                excel_show.get('m_25_35'),
+                excel_show.get('m_35_plus'),
+                excel_show.get('female'),
+                excel_show.get('male'),
                 show_id
             ))
             cursor.close()

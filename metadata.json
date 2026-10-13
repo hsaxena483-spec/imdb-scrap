@@ -31,8 +31,8 @@
         "time_period": "WK-27, 2026 ( 4 Jul 2026 - 10 Jul 2026 )",
         "market": "ALL INDIA"
     },
-    "Week": {
-        "time_period": "WK-31, 2026 ( 01 Aug 2026 - 07 Aug 2026 )",
-        "market": "MARKET"
+    "WK-36,2026": {
+        "time_period": "WK-36, 2026 ( 5 Sep 2026 - 11 Sep 2026 )",
+        "market": "ALL INDIA"
     }
 }

@@ -449,7 +449,10 @@ def admin_get_show_details(show_id):
         
         query = """
         SELECT id, title, type, release_year, current_rank, platform, plot, poster_url, creators, stars, 
-               play_url, trailer_url, global_rating, global_vote_count, runtime_seconds
+               play_url, trailer_url, global_rating, global_vote_count, runtime_seconds,
+               reach, total_time_spent, f_under_18, f_18_24, f_25_35, f_35_plus,
+               m_under_18, m_18_24, m_25_35, m_35_plus, female, male,
+               week, market, content_format, paid_free, content_type, languages
         FROM shows 
         WHERE id = %s
         """
@@ -509,6 +512,24 @@ def admin_get_show_details(show_id):
             "global_rating": float(row[12]) if row[12] is not None else None,
             "global_vote_count": row[13],
             "runtime_seconds": row[14],
+            "reach": float(row[15]) if row[15] is not None else None,
+            "total_time_spent": float(row[16]) if row[16] is not None else None,
+            "f_under_18": float(row[17]) if row[17] is not None else None,
+            "f_18_24": float(row[18]) if row[18] is not None else None,
+            "f_25_35": float(row[19]) if row[19] is not None else None,
+            "f_35_plus": float(row[20]) if row[20] is not None else None,
+            "m_under_18": float(row[21]) if row[21] is not None else None,
+            "m_18_24": float(row[22]) if row[22] is not None else None,
+            "m_25_35": float(row[23]) if row[23] is not None else None,
+            "m_35_plus": float(row[24]) if row[24] is not None else None,
+            "female": float(row[25]) if row[25] is not None else None,
+            "male": float(row[26]) if row[26] is not None else None,
+            "week": row[27],
+            "market": row[28],
+            "content_format": row[29],
+            "paid_free": row[30],
+            "content_type": row[31],
+            "languages": row[32],
             "genres": genres,
             "reviews": reviews
         }
@@ -601,6 +622,28 @@ def admin_update_show_details(show_id):
     except ValueError:
         runtime_seconds = None
 
+    def parse_optional_float(key):
+        val = data.get(key)
+        if val is None or str(val).strip() == "":
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    reach = parse_optional_float("reach")
+    total_time_spent = parse_optional_float("total_time_spent")
+    f_under_18 = parse_optional_float("f_under_18")
+    f_18_24 = parse_optional_float("f_18_24")
+    f_25_35 = parse_optional_float("f_25_35")
+    f_35_plus = parse_optional_float("f_35_plus")
+    m_under_18 = parse_optional_float("m_under_18")
+    m_18_24 = parse_optional_float("m_18_24")
+    m_25_35 = parse_optional_float("m_25_35")
+    m_35_plus = parse_optional_float("m_35_plus")
+    female = parse_optional_float("female")
+    male = parse_optional_float("male")
+
     platform = data.get("platform", "").strip()
     plot = data.get("plot", "").strip()
     poster_url = data.get("poster_url", "").strip()
@@ -618,14 +661,16 @@ def admin_update_show_details(show_id):
         conn, is_sqlite = get_db()
         cursor = conn.cursor()
         
-        # Check if show exists
-        check_query = "SELECT COUNT(*) FROM shows WHERE id = %s"
+        # Check if show exists and fetch its current week
+        check_query = "SELECT week FROM shows WHERE id = %s"
         if is_sqlite:
             check_query = check_query.replace("%s", "?")
         cursor.execute(check_query, (show_id,))
-        if cursor.fetchone()[0] == 0:
+        show_row = cursor.fetchone()
+        if not show_row:
             conn.close()
             return jsonify({"error": "Show not found"}), 404
+        current_week = show_row[0]
             
         # Get admin user ID from email
         user_query = "SELECT id FROM users WHERE email = %s"
@@ -635,12 +680,24 @@ def admin_update_show_details(show_id):
         user_row = cursor.fetchone()
         user_id = user_row[0] if user_row else g.current_admin
         
-        # Update shows table
+        # Update shows table (use COALESCE for COTT/demographic fields so existing values are never wiped if omitted)
         update_query = """
         UPDATE shows 
         SET title = %s, type = %s, release_year = %s, current_rank = %s, platform = %s, 
             plot = %s, poster_url = %s, creators = %s, stars = %s, play_url = %s, 
             trailer_url = %s, global_rating = %s, global_vote_count = %s, runtime_seconds = %s,
+            reach = COALESCE(%s, reach),
+            total_time_spent = COALESCE(%s, total_time_spent),
+            f_under_18 = COALESCE(%s, f_under_18),
+            f_18_24 = COALESCE(%s, f_18_24),
+            f_25_35 = COALESCE(%s, f_25_35),
+            f_35_plus = COALESCE(%s, f_35_plus),
+            m_under_18 = COALESCE(%s, m_under_18),
+            m_18_24 = COALESCE(%s, m_18_24),
+            m_25_35 = COALESCE(%s, m_25_35),
+            m_35_plus = COALESCE(%s, m_35_plus),
+            female = COALESCE(%s, female),
+            male = COALESCE(%s, male),
             updated_by = %s, updated_at = CURRENT_TIMESTAMP 
         WHERE id = %s
         """
@@ -662,9 +719,49 @@ def admin_update_show_details(show_id):
             global_rating,
             global_vote_count,
             runtime_seconds,
+            reach,
+            total_time_spent,
+            f_under_18,
+            f_18_24,
+            f_25_35,
+            f_35_plus,
+            m_under_18,
+            m_18_24,
+            m_25_35,
+            m_35_plus,
+            female,
+            male,
             user_id,
             show_id
         ))
+        
+        # Keep show_weekly_rankings in sync for the show's current week if present
+        if current_week:
+            update_wr_query = """
+            UPDATE show_weekly_rankings
+            SET current_rank = COALESCE(%s, current_rank),
+                reach = COALESCE(%s, reach),
+                total_time_spent = COALESCE(%s, total_time_spent),
+                f_under_18 = COALESCE(%s, f_under_18),
+                f_18_24 = COALESCE(%s, f_18_24),
+                f_25_35 = COALESCE(%s, f_25_35),
+                f_35_plus = COALESCE(%s, f_35_plus),
+                m_under_18 = COALESCE(%s, m_under_18),
+                m_18_24 = COALESCE(%s, m_18_24),
+                m_25_35 = COALESCE(%s, m_25_35),
+                m_35_plus = COALESCE(%s, m_35_plus),
+                female = COALESCE(%s, female),
+                male = COALESCE(%s, male)
+            WHERE show_id = %s AND week = %s
+            """
+            if is_sqlite:
+                update_wr_query = update_wr_query.replace("%s", "?")
+            cursor.execute(update_wr_query, (
+                current_rank, reach, total_time_spent,
+                f_under_18, f_18_24, f_25_35, f_35_plus,
+                m_under_18, m_18_24, m_25_35, m_35_plus,
+                female, male, show_id, current_week
+            ))
         
         # Update genres
         delete_genres_query = "DELETE FROM show_genres WHERE show_id = %s"
