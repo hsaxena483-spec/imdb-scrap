@@ -31,8 +31,76 @@
         "time_period": "WK-27, 2026 ( 4 Jul 2026 - 10 Jul 2026 )",
         "market": "ALL INDIA"
     },
+    "WK-28,2026": {
+        "time_period": "WK-28, 2026 ( 11 Jul 2026 - 17 Jul 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-29,2026": {
+        "time_period": "WK-29, 2026 ( 18 Jul 2026 - 24 Jul 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-30,2026": {
+        "time_period": "WK-30, 2026 ( 25 Jul 2026 - 31 Jul 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-31,2026": {
+        "time_period": "WK-31, 2026 ( 01 Aug 2026 - 07 Aug 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-32,2026": {
+        "time_period": "WK-32, 2026 ( 08 Aug 2026 - 14 Aug 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-33,2026": {
+        "time_period": "WK-33, 2026 ( 15 Aug 2026 - 21 Aug 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-34,2026": {
+        "time_period": "WK-34, 2026 ( 22 Aug 2026 - 28 Aug 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-35,2026": {
+        "time_period": "WK-35, 2026 ( 29 Aug 2026 - 04 Sep 2026 )",
+        "market": "ALL INDIA"
+    },
     "WK-36,2026": {
         "time_period": "WK-36, 2026 ( 5 Sep 2026 - 11 Sep 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-37,2026": {
+        "time_period": "WK-37, 2026 ( 12 Sep 2026 - 18 Sep 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-38,2026": {
+        "time_period": "WK-38, 2026 ( 19 Sep 2026 - 25 Sep 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-39,2026": {
+        "time_period": "WK-39, 2026 ( 26 Sep 2026 - 02 Oct 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-40,2026": {
+        "time_period": "WK-40, 2026 ( 03 Oct 2026 - 09 Oct 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-41,2026": {
+        "time_period": "WK-41, 2026 ( 10 Oct 2026 - 16 Oct 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-42,2026": {
+        "time_period": "WK-42, 2026 ( 17 Oct 2026 - 23 Oct 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-43,2026": {
+        "time_period": "WK-43, 2026 ( 24 Oct 2026 - 30 Oct 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-44,2026": {
+        "time_period": "WK-44, 2026 ( 31 Oct 2026 - 06 Nov 2026 )",
+        "market": "ALL INDIA"
+    },
+    "WK-45,2026": {
+        "time_period": "WK-45, 2026 ( 07 Nov 2026 - 13 Nov 2026 )",
         "market": "ALL INDIA"
     }
 }

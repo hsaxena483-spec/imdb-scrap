@@ -497,21 +497,52 @@ def init_db():
 
         # 8. Create scraping_jobs table
         print("Creating table: scraping_jobs...")
-        create_jobs_sql = """
-        CREATE TABLE IF NOT EXISTS scraping_jobs (
-            id SERIAL PRIMARY KEY,
-            status VARCHAR(50) DEFAULT 'pending',
-            total_shows INTEGER DEFAULT 0,
-            processed_shows INTEGER DEFAULT 0,
-            current_show VARCHAR(255),
-            error_message TEXT,
+        if is_sqlite:
+            create_jobs_sql = """
+            CREATE TABLE IF NOT EXISTS scraping_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                status VARCHAR(50) DEFAULT 'pending',
+                total_shows INTEGER DEFAULT 0,
+                processed_shows INTEGER DEFAULT 0,
+                current_show VARCHAR(255),
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        else:
+            create_jobs_sql = """
+            CREATE TABLE IF NOT EXISTS scraping_jobs (
+                id SERIAL PRIMARY KEY,
+                status VARCHAR(50) DEFAULT 'pending',
+                total_shows INTEGER DEFAULT 0,
+                processed_shows INTEGER DEFAULT 0,
+                current_show VARCHAR(255),
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        try:
+            execute_query(conn, is_sqlite, create_jobs_sql)
+            conn.commit()
+        except Exception as job_err:
+            print(f"scraping_jobs table creation notice: {job_err}")
+
+        # 9. Create week_metadata table
+        print("Creating table: week_metadata...")
+        week_metadata_sql = """
+        CREATE TABLE IF NOT EXISTS week_metadata (
+            week VARCHAR(50) PRIMARY KEY,
+            time_period VARCHAR(255),
+            market VARCHAR(100) DEFAULT 'ALL INDIA',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
-        if is_sqlite:
-            conn.commit()
-            
+        execute_query(conn, is_sqlite, week_metadata_sql)
+        conn.commit()
+
         print("Database initialized successfully.")
         
         # Run cleanup and standardization
@@ -1036,5 +1067,100 @@ def get_db_data(query, params=None):
         conn.close()
     return rows, columns
 
+def save_week_metadata(week, time_period, market="ALL INDIA"):
+    """
+    Saves or updates week metadata (time_period, market) in the database.
+    """
+    if not week or not time_period:
+        return
+    normalized_week = str(week).strip().replace(" ", "")
+    conn, is_sqlite = get_connection()
+    try:
+        cursor = conn.cursor()
+        if is_sqlite:
+            query = """
+            INSERT INTO week_metadata (week, time_period, market, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT (week) DO UPDATE SET
+                time_period = excluded.time_period,
+                market = excluded.market,
+                updated_at = CURRENT_TIMESTAMP
+            """
+            cursor.execute(query, (normalized_week, str(time_period).strip(), str(market).strip() if market else 'ALL INDIA'))
+        else:
+            query = """
+            INSERT INTO week_metadata (week, time_period, market, updated_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (week) DO UPDATE SET
+                time_period = EXCLUDED.time_period,
+                market = EXCLUDED.market,
+                updated_at = CURRENT_TIMESTAMP
+            """
+            cursor.execute(query, (normalized_week, str(time_period).strip(), str(market).strip() if market else 'ALL INDIA'))
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        print(f"Error saving week metadata for {week}: {e}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+def get_week_metadata(week):
+    """
+    Retrieves week metadata from the database for a given week code.
+    Returns {'time_period': ..., 'market': ...} or None.
+    """
+    if not week:
+        return None
+    normalized_week = str(week).strip().replace(" ", "")
+    conn, is_sqlite = get_connection()
+    try:
+        cursor = conn.cursor()
+        query = "SELECT time_period, market FROM week_metadata WHERE week = %s"
+        if is_sqlite:
+            query = query.replace("%s", "?")
+        cursor.execute(query, (normalized_week,))
+        row = cursor.fetchone()
+        cursor.close()
+        if row:
+            return {
+                'time_period': row[0],
+                'market': row[1] or 'ALL INDIA'
+            }
+        return None
+    except Exception as e:
+        print(f"Error fetching week metadata for {week}: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_all_week_metadata():
+    """
+    Retrieves all week metadata mappings from the database.
+    Returns dict: {week: {'time_period': ..., 'market': ...}}
+    """
+    conn, is_sqlite = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT week, time_period, market FROM week_metadata ORDER BY week")
+        rows = cursor.fetchall()
+        cursor.close()
+        result = {}
+        for r in rows:
+            result[r[0]] = {
+                'time_period': r[1],
+                'market': r[2] or 'ALL INDIA'
+            }
+        return result
+    except Exception as e:
+        print(f"Error fetching all week metadata: {e}")
+        return {}
+    finally:
+        conn.close()
+
 if __name__ == "__main__":
     init_db()
+

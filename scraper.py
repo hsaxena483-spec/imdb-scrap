@@ -480,23 +480,41 @@ def read_excel_shows(filepath):
             col_map['total_time_spent'] = col
 
     # Save metadata (week/time period and market) to metadata.json
-    time_period = ws.cell(row=1, column=6).value
+    time_period = None
+    for r in range(1, 4):
+        for c in range(1, 15):
+            val = str(ws.cell(row=r, column=c).value or "").strip()
+            if "wk-" in val.lower() and "(" in val and ")" in val:
+                time_period = val
+                break
+        if time_period:
+            break
+
     market = ws.cell(row=data_start_row, column=col_map['market']).value or "ALL INDIA"
     if time_period:
         try:
-            week_val = ws.cell(row=data_start_row, column=col_map['week']).value or "WK-26,2026"
-            week_key = str(week_val).strip().replace(" ", "")
+            week_key = None
+            m = re.search(r'WK-(\d+)\s*[,|\']\s*(\d+)', time_period, re.IGNORECASE)
+            if m:
+                week_key = f"WK-{m.group(1)},{m.group(2)}"
+            else:
+                week_val = ws.cell(row=data_start_row, column=col_map['week']).value or "WK-26,2026"
+                m_row = re.search(r'WK-(\d+)\s*[,|\']\s*(\d+)', str(week_val), re.IGNORECASE)
+                if m_row:
+                    week_key = f"WK-{m_row.group(1)},{m_row.group(2)}"
+                else:
+                    week_key = str(week_val).strip().replace(" ", "").replace("'", ",")
+
             meta_filepath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.json")
             
             existing_meta = {}
             if os.path.exists(meta_filepath):
                 try:
-                    with open(meta_filepath, "r") as f:
+                    with open(meta_filepath, "r", encoding="utf-8") as f:
                         loaded = json.load(f)
                         if isinstance(loaded, dict) and "time_period" not in loaded:
                             existing_meta = loaded
                         elif isinstance(loaded, dict) and "time_period" in loaded:
-                            # Convert old single-week format to dict
                             old_key = "WK-26,2026"
                             if "WK-27" in loaded["time_period"]:
                                 old_key = "WK-27,2026"
@@ -504,24 +522,31 @@ def read_excel_shows(filepath):
                 except Exception:
                     pass
             
-            # Remove any bogus "Week" key from header misreads
             existing_meta.pop("Week", None)
             
-            # Clean up potential typos (e.g. if the cell text starts with WK-26 when it is actually WK-27)
             clean_time_period = str(time_period).strip()
             if "WK-27" in week_key and clean_time_period.startswith("WK-26"):
                 clean_time_period = clean_time_period.replace("WK-26", "WK-27", 1)
             
             if week_key.lower() != "week":
+                clean_market = str(market).strip() if market else "ALL INDIA"
+                # 1. Save directly to PostgreSQL database week_metadata table
+                try:
+                    import db
+                    db.save_week_metadata(week_key, clean_time_period, clean_market)
+                    print(f"Saved week_metadata in DB for {week_key}: {clean_time_period} | {clean_market}")
+                except Exception as db_meta_err:
+                    print(f"Warning: Could not save week_metadata to DB: {db_meta_err}")
+
+                # 2. Also keep metadata.json in sync as local mirror
                 existing_meta[week_key] = {
                     "time_period": clean_time_period,
-                    "market": str(market).strip()
+                    "market": clean_market
                 }
-                with open(meta_filepath, "w") as f:
+                with open(meta_filepath, "w", encoding="utf-8") as f:
                     json.dump(existing_meta, f, indent=4)
-                print(f"Saved metadata for {week_key}: {clean_time_period} | {market}")
         except Exception as e:
-            print(f"Warning: Could not save metadata.json: {e}")
+            print(f"Warning: Could not save metadata: {e}")
 
     def parse_float_col(row_idx, col_key):
         col_idx = col_map.get(col_key)

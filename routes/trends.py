@@ -9,6 +9,72 @@ from config import normalize_genre
 
 trends_bp = Blueprint('trends', __name__)
 
+def get_week_metadata(week_code, default_market="ALL INDIA"):
+    """
+    Returns {'time_period': ..., 'market': ...} for a given week_code (e.g. 'WK-31,2026').
+    Queries PostgreSQL week_metadata table first, fallbacks to metadata.json,
+    and if missing, dynamically computes the Saturday-Friday date range and saves to DB.
+    """
+    if not week_code:
+        return {"time_period": "Historical Trends", "market": default_market}
+        
+    normalized_key = str(week_code).strip().replace(" ", "")
+
+    # 1. Check PostgreSQL week_metadata table
+    try:
+        from db import get_week_metadata as db_get_meta
+        db_meta = db_get_meta(normalized_key)
+        if db_meta:
+            return db_meta
+    except Exception as db_err:
+        print(f"Warning: Could not fetch week_metadata from DB: {db_err}")
+
+    # 2. Check metadata.json fallback
+    meta_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "metadata.json")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    if normalized_key in loaded:
+                        return loaded[normalized_key]
+                    for k, v in loaded.items():
+                        if k.replace(" ", "").lower() == normalized_key.lower():
+                            return v
+        except Exception as e:
+            print(f"Warning: Could not read metadata.json: {e}")
+            
+    # 3. Dynamic fallback: compute COTT week dates (Saturday to Friday)
+    # COTT 2026 Season: Week 20 starts 16 May 2026
+    match = re.search(r'WK-(\d+)\s*[,|\']\s*(\d+)', normalized_key, re.IGNORECASE)
+    if match:
+        w_num = int(match.group(1))
+        y_num = int(match.group(2))
+        try:
+            import datetime
+            start_date = datetime.date(y_num, 5, 16) + datetime.timedelta(days=(w_num - 20) * 7)
+            end_date = start_date + datetime.timedelta(days=6)
+            s_str = f"{start_date.day:02d} {start_date.strftime('%b')} {start_date.year}"
+            e_str = f"{end_date.day:02d} {end_date.strftime('%b')} {end_date.year}"
+            computed_result = {
+                "time_period": f"WK-{w_num}, {y_num} ( {s_str} - {e_str} )",
+                "market": default_market
+            }
+            # Auto-save computed metadata to database for future requests
+            try:
+                from db import save_week_metadata as db_save_meta
+                db_save_meta(normalized_key, computed_result["time_period"], default_market)
+            except Exception:
+                pass
+            return computed_result
+        except Exception:
+            pass
+            
+    return {
+        "time_period": str(week_code),
+        "market": default_market
+    }
+
 @trends_bp.route("/analytics")
 def analytics():
     # Check if we have weekly rankings table populated
@@ -199,23 +265,8 @@ def analytics():
             })
         lang_percentages = sorted(lang_percentages, key=lambda x: x['percentage'], reverse=True)
 
-    # Load metadata from metadata.json
-    metadata = {
-        "time_period": "WK-26, 2026 ( 27 Jun 2026 - 3 Jul 2026 )",
-        "market": "ALL INDIA"
-    }
-    if os.path.exists("metadata.json"):
-        try:
-            with open("metadata.json", "r") as f:
-                loaded_meta = json.load(f)
-                # If nested week dictionary
-                if selected_week in loaded_meta:
-                    metadata = loaded_meta[selected_week]
-                # Fallback for old single-week metadata format
-                elif "time_period" in loaded_meta:
-                    metadata = loaded_meta
-        except Exception as e:
-            print(f"Warning: Could not read metadata.json: {e}")
+    # Load metadata using get_week_metadata helper
+    metadata = get_week_metadata(selected_week)
 
     return render_template(
         "analytics.html", 
@@ -419,23 +470,8 @@ def api_analytics_json():
             })
         lang_percentages = sorted(lang_percentages, key=lambda x: x['percentage'], reverse=True)
 
-    # Load metadata from metadata.json
-    metadata = {
-        "time_period": "WK-26, 2026 ( 27 Jun 2026 - 3 Jul 2026 )",
-        "market": "ALL INDIA"
-    }
-    if os.path.exists("metadata.json"):
-        try:
-            with open("metadata.json", "r") as f:
-                loaded_meta = json.load(f)
-                # If nested week dictionary
-                if selected_week in loaded_meta:
-                    metadata = loaded_meta[selected_week]
-                # Fallback for old single-week metadata format
-                elif "time_period" in loaded_meta:
-                    metadata = loaded_meta
-        except Exception as e:
-            print(f"Warning: Could not read metadata.json: {e}")
+    # Load metadata using get_week_metadata helper
+    metadata = get_week_metadata(selected_week)
 
     return jsonify({
         'top_shows': top_shows,
@@ -519,21 +555,11 @@ def api_trending_metadata():
         return (0, 0)
     available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key)
     
-    latest_metadata = {
+    latest_week = available_weeks[-1] if available_weeks else None
+    latest_metadata = get_week_metadata(latest_week) if latest_week else {
         "time_period": "Historical Trends",
         "market": "ALL INDIA"
     }
-    if available_weeks and os.path.exists("metadata.json"):
-        try:
-            with open("metadata.json", "r") as f:
-                loaded_meta = json.load(f)
-                latest_week = available_weeks[-1]
-                if latest_week in loaded_meta:
-                    latest_metadata = loaded_meta[latest_week]
-                elif "time_period" in loaded_meta:
-                    latest_metadata = loaded_meta
-        except Exception:
-            pass
             
     return jsonify({
         'weeks': available_weeks,
@@ -553,21 +579,11 @@ def trending():
         return (0, 0)
     available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key)
     
-    latest_metadata = {
+    latest_week = available_weeks[-1] if available_weeks else None
+    latest_metadata = get_week_metadata(latest_week) if latest_week else {
         "time_period": "Historical Trends",
         "market": "ALL INDIA"
     }
-    if available_weeks and os.path.exists("metadata.json"):
-        try:
-            with open("metadata.json", "r") as f:
-                loaded_meta = json.load(f)
-                latest_week = available_weeks[-1]
-                if latest_week in loaded_meta:
-                    latest_metadata = loaded_meta[latest_week]
-                elif "time_period" in loaded_meta:
-                    latest_metadata = loaded_meta
-        except Exception:
-            pass
             
     return render_template("trending.html", shows=shows, weeks=available_weeks, metadata=latest_metadata)
 
@@ -631,22 +647,28 @@ def api_content_trends():
         return sorted(list(set(w_list)), key=sort_weeks_key)
         
     plat_weeks = sort_weeks([r[0] for r in plat_rows])
-    platforms = list(set([r[1] for r in plat_rows]))
+    raw_platforms = list(set([r[1] for r in plat_rows]))
     
-    plat_trends = {p: [0.0] * len(plat_weeks) for p in platforms}
+    plat_trends = {p: [0.0] * len(plat_weeks) for p in raw_platforms}
     for week, platform, reach in plat_rows:
         if week in plat_weeks:
             w_idx = plat_weeks.index(week)
             plat_trends[platform][w_idx] = round(float(reach), 2)
             
+    # Sort platforms by total reach descending
+    platforms = sorted(raw_platforms, key=lambda p: sum(plat_trends[p]), reverse=True)
+            
     form_weeks = sort_weeks([r[0] for r in format_rows])
-    formats = list(set([r[1] for r in format_rows]))
+    raw_formats = list(set([r[1] for r in format_rows]))
     
-    form_trends = {f: [0.0] * len(form_weeks) for f in formats}
+    form_trends = {f: [0.0] * len(form_weeks) for f in raw_formats}
     for week, content_format, reach in format_rows:
         if week in form_weeks:
             w_idx = form_weeks.index(week)
             form_trends[content_format][w_idx] = round(float(reach), 2)
+            
+    # Sort formats by total reach descending
+    formats = sorted(raw_formats, key=lambda f: sum(form_trends[f]), reverse=True)
             
     return jsonify({
         'platforms': {

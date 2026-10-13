@@ -55,6 +55,7 @@ def index():
     filter_content_format = request.args.getlist('content_format')
     filter_paid_free = request.args.getlist('paid_free')
     filter_gender = request.args.get('gender', '')
+    filter_age = request.args.get('age', '').strip()
     reach_min = request.args.get('reach_min', '', type=str)
     reach_max = request.args.get('reach_max', '', type=str)
     
@@ -129,13 +130,20 @@ def index():
             params.append(f"%{lang}%")
         where_clauses.append(f"({' OR '.join(lang_conditions)})")
     
-    # Gender filter: filter by platform gender demographics
-    if filter_gender == 'male':
-        # Show content from platforms where male audience > 50%
-        where_clauses.append("s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5)")
-    elif filter_gender == 'female':
-        # Show content from platforms where female audience > 50%
-        where_clauses.append("s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5)")
+    # Demographic (Gender & Age) filter
+    valid_ages = {'under_18', '18_24', '25_35', '35_plus'}
+    if filter_age in valid_ages:
+        if filter_gender == 'female':
+            where_clauses.append(f"s.f_{filter_age} IS NOT NULL AND s.f_{filter_age} > 0")
+        elif filter_gender == 'male':
+            where_clauses.append(f"s.m_{filter_age} IS NOT NULL AND s.m_{filter_age} > 0")
+        else:
+            where_clauses.append(f"((s.f_{filter_age} IS NOT NULL AND s.f_{filter_age} > 0) OR (s.m_{filter_age} IS NOT NULL AND s.m_{filter_age} > 0))")
+    elif filter_gender:
+        if filter_gender == 'male':
+            where_clauses.append("((s.male IS NOT NULL AND s.male > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5))")
+        elif filter_gender == 'female':
+            where_clauses.append("((s.female IS NOT NULL AND s.female > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5))")
     
     where_sql = " AND ".join(where_clauses)
     
@@ -430,6 +438,7 @@ def api_shows_json():
     filter_content_format = get_list_param('content_format')
     filter_paid_free = get_list_param('paid_free')
     filter_gender = request.args.get('gender', '')
+    filter_age = request.args.get('age', '').strip()
     reach_min = request.args.get('reach_min', '', type=str)
     reach_max = request.args.get('reach_max', '', type=str)
     sports_mode = request.args.get('sports_mode', '')
@@ -503,11 +512,20 @@ def api_shows_json():
             params.append(f"%{lang}%")
         where_clauses.append(f"({' OR '.join(lang_conditions)})")
     
-    # Gender filter
-    if filter_gender == 'male':
-        where_clauses.append("s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5)")
-    elif filter_gender == 'female':
-        where_clauses.append("s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5)")
+    # Demographic (Gender & Age) filter
+    valid_ages = {'under_18', '18_24', '25_35', '35_plus'}
+    if filter_age in valid_ages:
+        if filter_gender == 'female':
+            where_clauses.append(f"s.f_{filter_age} IS NOT NULL AND s.f_{filter_age} > 0")
+        elif filter_gender == 'male':
+            where_clauses.append(f"s.m_{filter_age} IS NOT NULL AND s.m_{filter_age} > 0")
+        else:
+            where_clauses.append(f"((s.f_{filter_age} IS NOT NULL AND s.f_{filter_age} > 0) OR (s.m_{filter_age} IS NOT NULL AND s.m_{filter_age} > 0))")
+    elif filter_gender:
+        if filter_gender == 'male':
+            where_clauses.append("((s.male IS NOT NULL AND s.male > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5))")
+        elif filter_gender == 'female':
+            where_clauses.append("((s.female IS NOT NULL AND s.female > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5))")
     
     where_sql = " AND ".join(where_clauses)
     
