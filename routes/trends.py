@@ -6,6 +6,7 @@ import sys
 from flask import Blueprint, request, jsonify, render_template, redirect, url_for
 from db import get_db, get_db_data
 from config import normalize_genre
+from decorators import get_allowed_weeks_for_request
 
 trends_bp = Blueprint('trends', __name__)
 
@@ -290,7 +291,7 @@ def api_analytics_json():
     selected_week = None
 
     if use_rankings_table:
-        weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings")
+        weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings WHERE week IS NOT NULL")
         def sort_weeks_key(w_code):
             match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(w_code))
             if match:
@@ -298,13 +299,20 @@ def api_analytics_json():
             return (0, 0)
         available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key, reverse=True)
         
+        allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+        if is_restricted and allowed_weeks is not None:
+            available_weeks = [w for w in available_weeks if w in allowed_weeks]
+
         selected_week = request.args.get("week")
-        if not selected_week and available_weeks:
+        if selected_week:
+            if is_restricted and allowed_weeks and selected_week not in allowed_weeks:
+                selected_week = available_weeks[0] if available_weeks else None
+        elif available_weeks:
             selected_week = available_weeks[0]
 
     # Fallback default if not set or empty
     if not selected_week:
-        selected_week = "WK-26,2026"
+        selected_week = available_weeks[0] if available_weeks else "WK-26,2026"
 
     # Query 1: Top 10 content
     if use_rankings_table:
@@ -549,13 +557,17 @@ def api_all_shows():
 
 @trends_bp.route("/api/trending_metadata")
 def api_trending_metadata():
-    weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings")
+    weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings WHERE week IS NOT NULL")
     def sort_weeks_key(w_code):
         match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(w_code))
         if match:
             return (int(match.group(2)), int(match.group(1)))
         return (0, 0)
     available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key)
+    
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks is not None:
+        available_weeks = [w for w in available_weeks if w in allowed_weeks]
     
     latest_week = available_weeks[-1] if available_weeks else None
     latest_metadata = get_week_metadata(latest_week) if latest_week else {
@@ -573,13 +585,17 @@ def trending():
     shows_rows, _ = get_db_data("SELECT id, title FROM shows ORDER BY title")
     shows = [{'id': r[0], 'title': r[1]} for r in shows_rows]
     
-    weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings")
+    weeks_rows, _ = get_db_data("SELECT DISTINCT week FROM show_weekly_rankings WHERE week IS NOT NULL")
     def sort_weeks_key(w_code):
         match = re.search(r'WK-(\d+)\s*,\s*(\d+)', str(w_code))
         if match:
             return (int(match.group(2)), int(match.group(1)))
         return (0, 0)
     available_weeks = sorted([r[0] for r in weeks_rows if r[0]], key=sort_weeks_key)
+    
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks is not None:
+        available_weeks = [w for w in available_weeks if w in allowed_weeks]
     
     latest_week = available_weeks[-1] if available_weeks else None
     latest_metadata = get_week_metadata(latest_week) if latest_week else {
@@ -595,11 +611,20 @@ def api_show_trends():
     if not show_id:
         return jsonify({'error': 'show_id is required'}), 400
         
-    rows, _ = get_db_data("""
-        SELECT week, current_rank, reach 
-        FROM show_weekly_rankings 
-        WHERE show_id = %s
-    """, (show_id,))
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks:
+        placeholders = ','.join(['%s'] * len(allowed_weeks))
+        rows, _ = get_db_data(f"""
+            SELECT week, current_rank, reach 
+            FROM show_weekly_rankings 
+            WHERE show_id = %s AND week IN ({placeholders})
+        """, [show_id] + allowed_weeks)
+    else:
+        rows, _ = get_db_data("""
+            SELECT week, current_rank, reach 
+            FROM show_weekly_rankings 
+            WHERE show_id = %s
+        """, (show_id,))
     
     def sort_weeks_key(row):
         w_code = row[0]
@@ -626,19 +651,27 @@ def api_show_trends():
 
 @trends_bp.route("/api/content_trends")
 def api_content_trends():
-    plat_rows, _ = get_db_data("""
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    where_week = ""
+    params = []
+    if is_restricted and allowed_weeks:
+        placeholders = ','.join(['%s'] * len(allowed_weeks))
+        where_week = f" AND week IN ({placeholders})"
+        params = list(allowed_weeks)
+
+    plat_rows, _ = get_db_data(f"""
         SELECT week, platform, SUM(reach) as total_reach 
         FROM show_weekly_rankings 
-        WHERE platform IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL 
+        WHERE platform IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL{where_week}
         GROUP BY week, platform
-    """)
+    """, tuple(params) if params else None)
     
-    format_rows, _ = get_db_data("""
+    format_rows, _ = get_db_data(f"""
         SELECT week, content_format, SUM(reach) as total_reach 
         FROM show_weekly_rankings 
-        WHERE content_format IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL 
+        WHERE content_format IS NOT NULL AND reach IS NOT NULL AND current_rank IS NOT NULL{where_week}
         GROUP BY week, content_format
-    """)
+    """, tuple(params) if params else None)
     
     def sort_weeks(w_list):
         def sort_weeks_key(w_code):
@@ -687,19 +720,27 @@ def api_content_trends():
 
 @trends_bp.route("/api/genre_trends")
 def api_genre_trends():
-    genre_rows, _ = get_db_data("""
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    where_week = ""
+    params = []
+    if is_restricted and allowed_weeks:
+        placeholders = ','.join(['%s'] * len(allowed_weeks))
+        where_week = f" AND w.week IN ({placeholders})"
+        params = list(allowed_weeks)
+
+    genre_rows, _ = get_db_data(f"""
         SELECT w.week, w.show_id, w.reach, g.genre 
         FROM show_weekly_rankings w 
         JOIN show_genres g ON w.show_id = g.show_id 
-        WHERE w.reach IS NOT NULL AND w.current_rank IS NOT NULL
-    """)
+        WHERE w.reach IS NOT NULL AND w.current_rank IS NOT NULL{where_week}
+    """, tuple(params) if params else None)
     
-    lang_rows, _ = get_db_data("""
+    lang_rows, _ = get_db_data(f"""
         SELECT w.week, w.show_id, w.reach, s.languages 
         FROM show_weekly_rankings w 
         JOIN shows s ON w.show_id = s.id 
-        WHERE w.reach IS NOT NULL AND w.current_rank IS NOT NULL AND s.languages IS NOT NULL
-    """)
+        WHERE w.reach IS NOT NULL AND w.current_rank IS NOT NULL AND s.languages IS NOT NULL{where_week}
+    """, tuple(params) if params else None)
     
     def sort_weeks(w_list):
         def sort_weeks_key(w_code):

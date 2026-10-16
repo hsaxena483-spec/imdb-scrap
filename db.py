@@ -396,20 +396,27 @@ def init_db():
             is_active BOOLEAN DEFAULT TRUE,
             account_type VARCHAR(50) DEFAULT 'free',
             plan_status VARCHAR(50) DEFAULT 'none',
+            allowed_weeks INTEGER DEFAULT NULL,
             password VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
 
-        # Alter table to add password column if database already exists
+        # Alter table to add password and allowed_weeks columns if database already exists
         try:
             execute_query(conn, is_sqlite, "ALTER TABLE users ADD COLUMN password VARCHAR(255)")
             conn.commit()
             print("Successfully added password column to users table")
         except Exception as alter_err:
-            # Ignored if column already exists
-            print(f"Password column not added (may already exist): {alter_err}")
+            pass
+
+        try:
+            execute_query(conn, is_sqlite, "ALTER TABLE users ADD COLUMN allowed_weeks INTEGER DEFAULT NULL")
+            conn.commit()
+            print("Successfully added allowed_weeks column to users table")
+        except Exception as alter_err:
+            pass
 
         # Seed the admin user if not exists
         try:
@@ -621,10 +628,6 @@ def cleanup_and_standardize_data(conn, is_sqlite):
     from config import normalize_genre
     for show_id, genre in genre_rows:
         clean_genre = normalize_genre(genre)
-        if clean_genre in ['Sport', 'Sports']:
-            genres_to_delete.append((show_id, genre))
-            continue
-            
         key = (show_id, clean_genre)
         if key in seen:
             genres_to_delete.append((show_id, genre))
@@ -840,7 +843,7 @@ def save_genres(conn, is_sqlite, show_id, genres):
     for genre in genres:
         if genre:
             clean_genre = normalize_genre(genre)
-            if clean_genre and clean_genre not in ['Sport', 'Sports']:
+            if clean_genre:
                 execute_query(conn, is_sqlite, query, (show_id, clean_genre))
 
 def save_country_ratings(conn, is_sqlite, show_id, country_ratings):
@@ -1000,7 +1003,7 @@ def get_user(conn, is_sqlite, user_id):
     """
     Fetches a user by their Google subject ID.
     """
-    query = "SELECT id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, created_at, updated_at FROM users WHERE id = %s"
+    query = "SELECT id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, allowed_weeks, created_at, updated_at FROM users WHERE id = %s"
     try:
         cursor = execute_query(conn, is_sqlite, query, (user_id,))
         row = cursor.fetchone()

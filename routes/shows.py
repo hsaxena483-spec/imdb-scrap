@@ -3,6 +3,7 @@ import re
 from flask import Blueprint, request, jsonify, render_template
 from db import get_db, get_db_data
 from config import normalize_genre
+from decorators import get_allowed_weeks_for_request
 
 shows_bp = Blueprint('shows', __name__)
 
@@ -114,10 +115,17 @@ def index():
             if db_gen and normalize_genre(db_gen) in filter_genre:
                 raw_matches.append(db_gen)
         
+        has_sport = any(normalize_genre(g) == 'Sport' for g in filter_genre)
+        genre_subclauses = []
         if raw_matches:
             placeholders = ', '.join(['%s'] * len(raw_matches))
-            where_clauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
+            genre_subclauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
             params.extend(raw_matches)
+        if has_sport:
+            genre_subclauses.append("s.content_type = 'Sports'")
+            
+        if genre_subclauses:
+            where_clauses.append(f"({' OR '.join(genre_subclauses)})")
         else:
             where_clauses.append("1=0")
 
@@ -141,10 +149,16 @@ def index():
             where_clauses.append(f"((s.f_{filter_age} IS NOT NULL AND s.f_{filter_age} > 0) OR (s.m_{filter_age} IS NOT NULL AND s.m_{filter_age} > 0))")
     elif filter_gender:
         if filter_gender == 'male':
-            where_clauses.append("((s.male IS NOT NULL AND s.male > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5))")
+            where_clauses.append("s.male IS NOT NULL AND s.male > 0")
         elif filter_gender == 'female':
-            where_clauses.append("((s.female IS NOT NULL AND s.female > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5))")
+            where_clauses.append("s.female IS NOT NULL AND s.female > 0")
     
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks:
+        placeholders = ', '.join(['%s'] * len(allowed_weeks))
+        where_clauses.append(f"s.id IN (SELECT DISTINCT show_id FROM show_weekly_rankings WHERE week IN ({placeholders}))")
+        params.extend(allowed_weeks)
+
     where_sql = " AND ".join(where_clauses)
     
     # Count total matching items
@@ -255,7 +269,7 @@ def index():
     
     filter_options = {
         'platforms': [r[0] for r in platforms_data],
-        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0] and normalize_genre(r[0]) not in ['Sport', 'Sports']))),
+        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0]))),
         'content_types': [r[0] for r in content_types_data],
         'content_formats': [r[0] for r in content_formats_data],
         'paid_free': [r[0] for r in paid_free_data],
@@ -375,15 +389,28 @@ def show_detail(show_id):
         reviews.append(rev)
         
     # Fetch weekly ranking history sorted chronologically
-    history_rows, _ = get_db_data("""
-        SELECT week, current_rank, reach, total_time_spent,
-               f_under_18, f_18_24, f_25_35, f_35_plus,
-               m_under_18, m_18_24, m_25_35, m_35_plus,
-               female, male
-        FROM show_weekly_rankings 
-        WHERE show_id = %s 
-        ORDER BY week ASC
-    """, (show_id,))
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks:
+        placeholders = ', '.join(['%s'] * len(allowed_weeks))
+        history_rows, _ = get_db_data(f"""
+            SELECT week, current_rank, reach, total_time_spent,
+                   f_under_18, f_18_24, f_25_35, f_35_plus,
+                   m_under_18, m_18_24, m_25_35, m_35_plus,
+                   female, male
+            FROM show_weekly_rankings 
+            WHERE show_id = %s AND week IN ({placeholders})
+            ORDER BY week ASC
+        """, [show_id] + allowed_weeks)
+    else:
+        history_rows, _ = get_db_data("""
+            SELECT week, current_rank, reach, total_time_spent,
+                   f_under_18, f_18_24, f_25_35, f_35_plus,
+                   m_under_18, m_18_24, m_25_35, m_35_plus,
+                   female, male
+            FROM show_weekly_rankings 
+            WHERE show_id = %s 
+            ORDER BY week ASC
+        """, (show_id,))
     
     def sort_history_key(row):
         w_code = row[0]
@@ -497,10 +524,17 @@ def api_shows_json():
             if db_gen and normalize_genre(db_gen) in filter_genre:
                 raw_matches.append(db_gen)
         
+        has_sport = any(normalize_genre(g) == 'Sport' for g in filter_genre)
+        genre_subclauses = []
         if raw_matches:
             placeholders = ', '.join(['%s'] * len(raw_matches))
-            where_clauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
+            genre_subclauses.append(f"s.id IN (SELECT show_id FROM show_genres WHERE genre IN ({placeholders}))")
             params.extend(raw_matches)
+        if has_sport:
+            genre_subclauses.append("s.content_type = 'Sports'")
+            
+        if genre_subclauses:
+            where_clauses.append(f"({' OR '.join(genre_subclauses)})")
         else:
             where_clauses.append("1=0")
     
@@ -523,10 +557,16 @@ def api_shows_json():
             where_clauses.append(f"((s.f_{filter_age} IS NOT NULL AND s.f_{filter_age} > 0) OR (s.m_{filter_age} IS NOT NULL AND s.m_{filter_age} > 0))")
     elif filter_gender:
         if filter_gender == 'male':
-            where_clauses.append("((s.male IS NOT NULL AND s.male > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE male_pct > 0.5))")
+            where_clauses.append("s.male IS NOT NULL AND s.male > 0")
         elif filter_gender == 'female':
-            where_clauses.append("((s.female IS NOT NULL AND s.female > 0) OR s.platform IN (SELECT platform FROM platform_gender WHERE female_pct > 0.5))")
+            where_clauses.append("s.female IS NOT NULL AND s.female > 0")
     
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks:
+        placeholders = ', '.join(['%s'] * len(allowed_weeks))
+        where_clauses.append(f"s.id IN (SELECT DISTINCT show_id FROM show_weekly_rankings WHERE week IN ({placeholders}))")
+        params.extend(allowed_weeks)
+
     where_sql = " AND ".join(where_clauses)
     
     # Count total matching items
@@ -637,7 +677,7 @@ def api_shows_json():
     
     filter_options = {
         'platforms': [r[0] for r in platforms_data],
-        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0] and normalize_genre(r[0]) not in ['Sport', 'Sports']))),
+        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0]))),
         'content_types': [r[0] for r in content_types_data],
         'content_formats': [r[0] for r in content_formats_data],
         'paid_free': [r[0] for r in paid_free_data],
@@ -724,15 +764,28 @@ def api_show_detail_json(show_id):
         reviews.append(rev)
         
     # Fetch weekly ranking history
-    history_rows, _ = get_db_data("""
-        SELECT week, current_rank, reach, total_time_spent,
-               f_under_18, f_18_24, f_25_35, f_35_plus,
-               m_under_18, m_18_24, m_25_35, m_35_plus,
-               female, male
-        FROM show_weekly_rankings 
-        WHERE show_id = %s 
-        ORDER BY week ASC
-    """, (show_id,))
+    allowed_weeks, is_restricted = get_allowed_weeks_for_request()
+    if is_restricted and allowed_weeks:
+        placeholders = ', '.join(['%s'] * len(allowed_weeks))
+        history_rows, _ = get_db_data(f"""
+            SELECT week, current_rank, reach, total_time_spent,
+                   f_under_18, f_18_24, f_25_35, f_35_plus,
+                   m_under_18, m_18_24, m_25_35, m_35_plus,
+                   female, male
+            FROM show_weekly_rankings 
+            WHERE show_id = %s AND week IN ({placeholders})
+            ORDER BY week ASC
+        """, [show_id] + allowed_weeks)
+    else:
+        history_rows, _ = get_db_data("""
+            SELECT week, current_rank, reach, total_time_spent,
+                   f_under_18, f_18_24, f_25_35, f_35_plus,
+                   m_under_18, m_18_24, m_25_35, m_35_plus,
+                   female, male
+            FROM show_weekly_rankings 
+            WHERE show_id = %s 
+            ORDER BY week ASC
+        """, (show_id,))
     
     def sort_history_key(row):
         w_code = row[0]
@@ -781,7 +834,7 @@ def api_filters():
     
     return jsonify({
         'platforms': [r[0] for r in platforms_data],
-        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0] and normalize_genre(r[0]) not in ['Sport', 'Sports']))),
+        'genres': sorted(list(set(normalize_genre(r[0]) for r in genres_data if r[0]))),
         'content_types': [r[0] for r in content_types_data],
         'content_formats': [r[0] for r in content_formats_data],
     })

@@ -79,7 +79,7 @@ def admin_get_users():
         conn, is_sqlite = get_db()
         cursor = conn.cursor()
         query = """
-        SELECT id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, created_at 
+        SELECT id, email, name, picture, phone_number, user_role, is_active, account_type, plan_status, allowed_weeks, created_at 
         FROM users 
         ORDER BY created_at DESC
         """
@@ -98,12 +98,47 @@ def admin_get_users():
                 "is_active": r[6],
                 "account_type": r[7],
                 "plan_status": r[8],
-                "created_at": r[9].isoformat() if r[9] and hasattr(r[9], 'isoformat') else str(r[9])
+                "allowed_weeks": r[9],
+                "created_at": r[10].isoformat() if r[10] and hasattr(r[10], 'isoformat') else str(r[10])
             })
         return jsonify(users), 200
     except Exception as e:
         print(f"Error in admin_get_users: {e}")
         return jsonify({"error": "Failed to fetch users", "details": str(e)}), 500
+
+@admin_bp.route("/api/admin/users/<user_id>/access", methods=["PUT"])
+@requires_admin_auth
+def admin_update_user_access(user_id):
+    if g.current_admin != "superadmin@cott.com":
+        return jsonify({"error": "Forbidden: Only super admin can modify user access"}), 403
+    data = request.get_json() or {}
+    allowed_weeks = data.get("allowed_weeks")
+    if allowed_weeks is not None:
+        try:
+            allowed_weeks = int(allowed_weeks)
+            if allowed_weeks <= 0:
+                allowed_weeks = None
+        except (ValueError, TypeError):
+            return jsonify({"error": "allowed_weeks must be a positive integer or null"}), 400
+
+    try:
+        conn, is_sqlite = get_db()
+        cursor = conn.cursor()
+        query = "UPDATE users SET allowed_weeks = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+        if is_sqlite:
+            query = query.replace("%s", "?")
+        cursor.execute(query, (allowed_weeks, user_id))
+        conn.commit()
+        conn.close()
+        return jsonify({
+            "success": True,
+            "user_id": user_id,
+            "allowed_weeks": allowed_weeks,
+            "message": f"Updated week access: {'All Weeks (Default)' if allowed_weeks is None else f'Latest {allowed_weeks} Weeks'}"
+        }), 200
+    except Exception as e:
+        print(f"Error updating user access: {e}")
+        return jsonify({"error": "Failed to update user access", "details": str(e)}), 500
 
 @admin_bp.route("/api/admin/upload-excel", methods=["POST"])
 @requires_admin_auth
@@ -781,7 +816,7 @@ def admin_update_show_details(show_id):
             for genre in genres:
                 if genre:
                     clean_genre = normalize_genre(genre.strip())
-                    if clean_genre and clean_genre not in ['Sport', 'Sports']:
+                    if clean_genre:
                         try:
                             cursor.execute(insert_genre_query, (show_id, clean_genre))
                         except Exception:

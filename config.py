@@ -23,4 +23,6 @@ def normalize_genre(genre_name):
         return "Game Show"
     if g in ["tv-movie", "tv movie"]:
         return "TV Movie"
+    if g in ["sport", "sports"]:
+        return "Sport"
     return genre_name.strip().replace('-', ' ').title()
